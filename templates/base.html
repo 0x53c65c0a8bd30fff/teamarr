@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Teamarr - Sports Team EPG Generator{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <!-- Notification Container (floating) -->
+    <div id="notification-container"></div>
+
+    <nav class="navbar">
+        <div class="container nav-container">
+            <div class="nav-brand">
+                <h1>Teamarr 🏈⚾🏀🏒⚽</h1>
+                <span class="tagline">Sports Team EPG Generator</span>
+            </div>
+            <ul class="nav-menu">
+                <li><a href="{{ url_for('index') }}" class="nav-link">Dashboard</a></li>
+                <li><a href="{{ url_for('teams_list') }}" class="nav-link">Teams</a></li>
+                <li><a href="{{ url_for('settings') }}" class="nav-link">Settings</a></li>
+            </ul>
+            <div class="nav-right">
+                <span style="color: #64748b; font-size: 0.85rem;">v{{ version }}</span>
+                <button onclick="toggleTheme()" class="theme-toggle" title="Toggle dark/light mode">
+                    <span id="theme-icon">🌙</span>
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>Teamarr Sports Team EPG Generator | Port 9195</p>
+        </div>
+    </footer>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

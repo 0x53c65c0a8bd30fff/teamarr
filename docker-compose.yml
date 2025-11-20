@@ -1,0 +1,49 @@
+services:
+  teamarr:
+    image: ghcr.io/egyptiangio/teamarr:latest
+    container_name: teamarr
+    restart: unless-stopped
+
+    ports:
+      - "9195:9195"
+
+    volumes:
+      # Persist database
+      - ./data/database:/app/database
+      # Persist EPG output
+      - ./data/output:/app/output
+
+    environment:
+      # Flask Configuration
+      - FLASK_ENV=production
+      - SECRET_KEY=${SECRET_KEY:-change-this-to-a-random-secret-key}
+
+      # Server Configuration
+      - PORT=9195
+      - HOST=0.0.0.0
+
+      # Database Configuration
+      - DATABASE_PATH=/app/database/teamarr.db
+
+      # EPG Generation Settings
+      - DEFAULT_DAYS_AHEAD=${DEFAULT_DAYS_AHEAD:-7}
+      - MAX_DAYS_AHEAD=${MAX_DAYS_AHEAD:-14}
+      - TZ=${TZ:-America/New_York}
+
+      # Scheduler Settings
+      - SCHEDULER_ENABLED=${SCHEDULER_ENABLED:-true}
+      - SCHEDULER_CRON=${SCHEDULER_CRON:-0 3 * * *}
+
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9195/health').read()"]
+      interval: 30s
+      timeout: 10s
+      start_period: 5s
+      retries: 3
+
+volumes:
+  database:
+  output:

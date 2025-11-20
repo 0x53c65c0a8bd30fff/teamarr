@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - Teamarr{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <h2>Application Settings</h2>
+        <a href="{{ url_for('index') }}" class="btn btn-secondary">← Back to Dashboard</a>
+    </div>
+
+    <form method="POST">
+        <fieldset>
+            <legend><h3>EPG Generation</h3></legend>
+
+            <div class="form-group">
+                <label for="epg_days_ahead">Days Ahead</label>
+                <input type="number" name="epg_days_ahead" id="epg_days_ahead" min="1" max="30" value="{{ settings.epg_days_ahead }}" required>
+                <small class="help-text">How many days of schedule to include in EPG (1-30)</small>
+            </div>
+
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="auto_generate_enabled" {% if settings.auto_generate_enabled %}checked{% endif %}>
+                    Enable Auto-Generation
+                </label>
+                <small class="help-text">Automatically regenerate EPG file on schedule</small>
+            </div>
+
+            <div class="form-group">
+                <label for="auto_generate_frequency">Generation Frequency</label>
+                <select name="auto_generate_frequency" id="auto_generate_frequency">
+                    <option value="hourly" {% if settings.auto_generate_frequency == 'hourly' %}selected{% endif %}>Hourly</option>
+                    <option value="daily" {% if settings.auto_generate_frequency == 'daily' or not settings.auto_generate_frequency %}selected{% endif %}>Daily (Recommended)</option>
+                    <option value="weekly" {% if settings.auto_generate_frequency == 'weekly' %}selected{% endif %}>Weekly</option>
+                </select>
+                <small class="help-text">How often to automatically regenerate the EPG file</small>
+            </div>
+
+            <div class="form-group">
+                <label for="epg_update_time">Update Time</label>
+                <input type="time" name="epg_update_time" id="epg_update_time" value="{{ settings.epg_update_time }}" required>
+                <small class="help-text">Time to run auto-generation (used for daily/weekly schedules)</small>
+            </div>
+        </fieldset>
+
+        <hr style="margin: 2rem 0;">
+
+        <fieldset>
+            <legend><h3>Cache Settings</h3></legend>
+
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="cache_enabled" {% if settings.cache_enabled %}checked{% endif %}>
+                    Enable Caching
+                </label>
+                <small class="help-text">Cache ESPN API responses to reduce API calls and improve performance</small>
+            </div>
+
+            <div class="form-group">
+                <label for="cache_duration_hours">Cache Duration (hours)</label>
+                <input type="number" name="cache_duration_hours" id="cache_duration_hours" min="1" max="168" value="{{ settings.cache_duration_hours }}" required>
+                <small class="help-text">How long to keep cached data before refreshing (1-168 hours)</small>
+            </div>
+        </fieldset>
+
+        <hr style="margin: 2rem 0;">
+
+        <fieldset>
+            <legend><h3>EPG Timezone</h3></legend>
+
+            <div class="form-group">
+                <label for="default_timezone">EPG Timezone</label>
+                <input type="text" name="default_timezone" id="default_timezone" value="{{ settings.default_timezone }}" required>
+                <small class="help-text">IANA timezone identifier (e.g., America/New_York, America/Chicago, Europe/London)</small>
+            </div>
+        </fieldset>
+
+        <div class="form-actions">
+            <button type="submit" class="btn btn-success">💾 Save Settings</button>
+            <a href="{{ url_for('index') }}" class="btn btn-secondary">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}
