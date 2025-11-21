@@ -81,6 +81,12 @@ def run_scheduled_generation():
                     team_data = espn.get_team_info(team['sport'], team['league'], team['espn_team_id'])
                     api_calls += 1
 
+                    # Extract team logo from ESPN data if not already set
+                    if team_data and 'team' in team_data and not team.get('team_logo_url'):
+                        logos = team_data['team'].get('logos', [])
+                        if logos and len(logos) > 0:
+                            team['team_logo_url'] = logos[0].get('href', '')
+
                     schedule_data = espn.get_team_schedule(
                         team['sport'],
                         team['league'],
@@ -775,6 +781,12 @@ def generate_epg():
             team_data = espn.get_team_info(team['sport'], team['league'], team['espn_team_id'])
             team_stats_basic = espn.get_team_stats(team['sport'], team['league'], team['espn_team_id'])
             api_calls += 1
+
+            # Extract team logo from ESPN data if not already set
+            if team_data and 'team' in team_data and not team.get('team_logo_url'):
+                logos = team_data['team'].get('logos', [])
+                if logos and len(logos) > 0:
+                    team['team_logo_url'] = logos[0].get('href', '')
 
             # Fetch enhanced team stats (streaks, PPG, standings, home/away records)
             enhanced_stats = espn.get_team_stats(team['sport'], team['league'], team['espn_team_id'])

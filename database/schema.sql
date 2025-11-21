@@ -104,6 +104,12 @@ CREATE TABLE IF NOT EXISTS teams (
     between_games_title TEXT DEFAULT '{team_name} Programming',
     between_games_description TEXT DEFAULT 'Next game: {next_game_date} at {next_game_time} vs {next_opponent}',
 
+    -- Simplified Pregame/Postgame Templates (alternative to complex JSON periods)
+    pregame_title TEXT DEFAULT 'Pregame Coverage',
+    pregame_description TEXT DEFAULT '{team_name} plays {opponent} today at {game_time}',
+    postgame_title TEXT DEFAULT 'Postgame Recap',
+    postgame_description TEXT DEFAULT '{team_name} {result_text} {opponent} - Final: {final_score}',
+
     -- Template Variable Features
     enable_records BOOLEAN DEFAULT 1,         -- Enable {team_record}, {opponent_record}
     enable_streaks BOOLEAN DEFAULT 1,         -- Enable {win_streak}, {loss_streak}
@@ -115,6 +121,11 @@ CREATE TABLE IF NOT EXISTS teams (
     -- Conditional Descriptions (Templates tab)
     description_options JSON DEFAULT '[]',    -- Array of conditional description templates
     -- Structure: [{"condition_type": "is_home", "template": "...", "priority": 50, "condition_value": "..."}]
+
+    -- Program Display Settings
+    midnight_crossover_mode TEXT DEFAULT 'postgame',  -- How to handle games crossing midnight
+    max_program_hours REAL DEFAULT 6.0,       -- Maximum duration for a single program
+    categories_apply_to TEXT DEFAULT 'all',   -- 'all' or 'events' - control category application
 
     -- Active Status
     active BOOLEAN DEFAULT 1,                 -- Is this team active for EPG generation?
@@ -476,27 +487,17 @@ INSERT OR IGNORE INTO condition_presets (id, name, description, condition_type, 
 -- SCHEMA MIGRATIONS
 -- =============================================================================
 
--- Add XMLTV tag columns (if they don't exist)
--- Add simplified pregame/postgame content fields (alternative to complex JSON periods)
-ALTER TABLE teams ADD COLUMN pregame_title TEXT DEFAULT 'Pregame Coverage';
-ALTER TABLE teams ADD COLUMN pregame_description TEXT DEFAULT '{team_name} plays {opponent} today at {game_time}';
-ALTER TABLE teams ADD COLUMN postgame_title TEXT DEFAULT 'Postgame Recap';
-ALTER TABLE teams ADD COLUMN postgame_description TEXT DEFAULT '{team_name} {result_text} {opponent} - Final: {final_score}';
+-- NOTE: The following ALTER TABLE statements are for migrating existing databases.
+-- They should NOT be executed on fresh databases (columns already exist in CREATE TABLE above).
+-- Uncomment these lines ONLY when migrating an existing database.
 
--- Add timezone column (already in main schema but needs ALTER for existing DBs)
--- ALTER TABLE teams ADD COLUMN timezone TEXT DEFAULT 'America/New_York';
-
--- Add team_color column (already in main schema but needs ALTER for existing DBs)
--- ALTER TABLE teams ADD COLUMN team_color TEXT;
-
--- Add midnight_crossover_mode column (how to handle games that cross midnight)
-ALTER TABLE teams ADD COLUMN midnight_crossover_mode TEXT DEFAULT 'postgame';
-
--- Add max_program_hours column (maximum duration for a single program)
-ALTER TABLE teams ADD COLUMN max_program_hours REAL DEFAULT 6.0;
-
--- Add categories_apply_to column (controls whether categories apply to all programs or events only)
-ALTER TABLE teams ADD COLUMN categories_apply_to TEXT DEFAULT 'all';
+-- ALTER TABLE teams ADD COLUMN pregame_title TEXT DEFAULT 'Pregame Coverage';
+-- ALTER TABLE teams ADD COLUMN pregame_description TEXT DEFAULT '{team_name} plays {opponent} today at {game_time}';
+-- ALTER TABLE teams ADD COLUMN postgame_title TEXT DEFAULT 'Postgame Recap';
+-- ALTER TABLE teams ADD COLUMN postgame_description TEXT DEFAULT '{team_name} {result_text} {opponent} - Final: {final_score}';
+-- ALTER TABLE teams ADD COLUMN midnight_crossover_mode TEXT DEFAULT 'postgame';
+-- ALTER TABLE teams ADD COLUMN max_program_hours REAL DEFAULT 6.0;
+-- ALTER TABLE teams ADD COLUMN categories_apply_to TEXT DEFAULT 'all';
 
 -- =============================================================================
 -- END OF SCHEMA
