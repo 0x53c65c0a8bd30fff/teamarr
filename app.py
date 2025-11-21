@@ -1520,7 +1520,7 @@ def _generate_filler_entries(team: dict, game_events: List[dict], days_ahead: in
                         # Previous game crosses into today and mode is postgame
                         skip_idle = True
 
-            if not skip_idle and team.get('idle_enabled', True):
+            if not skip_idle and team.get('between_games_enabled', True):
                 # Find next game after current_date (use extended schedule for 30 days ahead)
                 next_game = _find_next_game(current_date, extended_game_schedule or game_schedule, extended_game_dates or game_dates)
 
