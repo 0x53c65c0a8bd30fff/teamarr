@@ -33,6 +33,7 @@ def init_database():
 
     # Run migrations after schema is initialized
     migrate_team_ids_to_numeric()
+    migrate_output_path_to_data_dir()
 
 def migrate_team_ids_to_numeric():
     """
@@ -95,6 +96,43 @@ def migrate_team_ids_to_numeric():
 
     except Exception as e:
         print(f"⚠️  Migration warning: {e}")
+        # Don't fail startup if migration has issues
+    finally:
+        conn.close()
+
+def migrate_output_path_to_data_dir():
+    """
+    Migrate EPG output path from ./output/teamarr.xml to /app/data/teamarr.xml.
+
+    This migration runs automatically on startup to fix the output path for Docker
+    volume mounting. The old path was ./output/teamarr.xml which didn't persist
+    across container restarts. The new path is /app/data/teamarr.xml which is
+    mounted as a Docker volume.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        # Check if settings has the old path
+        result = cursor.execute("""
+            SELECT epg_output_path FROM settings WHERE id = 1
+        """).fetchone()
+
+        if result:
+            current_path = result[0]
+            old_paths = ['./output/teamarr.xml', '/app/output/teamarr.xml']
+
+            if current_path in old_paths:
+                cursor.execute("""
+                    UPDATE settings
+                    SET epg_output_path = '/app/data/teamarr.xml'
+                    WHERE id = 1
+                """)
+                conn.commit()
+                print(f"🔄 Migrated EPG output path: {current_path} → /app/data/teamarr.xml")
+
+    except Exception as e:
+        print(f"⚠️  Output path migration warning: {e}")
         # Don't fail startup if migration has issues
     finally:
         conn.close()
