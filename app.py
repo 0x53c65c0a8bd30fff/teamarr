@@ -1056,7 +1056,9 @@ def settings():
                 cache_duration_hours = ?,
                 default_timezone = ?,
                 auto_generate_enabled = ?,
-                auto_generate_frequency = ?
+                auto_generate_frequency = ?,
+                xmltv_generator_name = ?,
+                xmltv_generator_url = ?
             WHERE id = 1
         """, (
             int(data.get('epg_days_ahead', 14)),
@@ -1066,7 +1068,9 @@ def settings():
             int(data.get('cache_duration_hours', 24)),
             data.get('default_timezone', 'America/New_York'),
             1 if data.get('auto_generate_enabled') == 'on' else 0,
-            data.get('auto_generate_frequency', 'daily')
+            data.get('auto_generate_frequency', 'daily'),
+            data.get('xmltv_generator_name', ''),
+            data.get('xmltv_generator_url', '')
         ))
 
         conn.commit()

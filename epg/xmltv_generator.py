@@ -28,8 +28,16 @@ class XMLTVGenerator:
         """
         # Create root element
         tv = ET.Element('tv')
-        tv.set('generator-info-name', self.generator_name)
-        tv.set('generator-info-url', self.generator_url)
+
+        # Get generator info from settings (can be overridden/excluded)
+        generator_name = settings.get('xmltv_generator_name', self.generator_name)
+        generator_url = settings.get('xmltv_generator_url', self.generator_url)
+
+        # Only add attributes if not empty
+        if generator_name:
+            tv.set('generator-info-name', generator_name)
+        if generator_url:
+            tv.set('generator-info-url', generator_url)
 
         # Add channels (one per team)
         for team in teams:

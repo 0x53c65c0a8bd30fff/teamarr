@@ -36,6 +36,7 @@ def init_database():
     migrate_output_path_to_data_dir()
     migrate_between_games_to_idle()
     migrate_timezone_from_env()
+    migrate_generator_url_from_host_port()
 
 def migrate_team_ids_to_numeric():
     """
@@ -222,6 +223,56 @@ def migrate_timezone_from_env():
 
     except Exception as e:
         print(f"⚠️  Timezone migration warning: {e}")
+        # Don't fail startup if migration has issues
+    finally:
+        conn.close()
+
+def migrate_generator_url_from_host_port():
+    """
+    Set xmltv_generator_url from web_host/web_port if still at default.
+
+    This allows the generator URL to default to the actual host/port being used,
+    rather than hardcoded localhost.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        # Get current settings
+        result = cursor.execute("""
+            SELECT xmltv_generator_url, web_host, web_port
+            FROM settings WHERE id = 1
+        """).fetchone()
+
+        if result:
+            current_url, web_host, web_port = result
+
+            # Only update if still at default value
+            if current_url == 'http://localhost:9195':
+                # Build URL from host/port
+                # If web_host is 0.0.0.0, try to get actual hostname
+                if web_host == '0.0.0.0':
+                    import socket
+                    try:
+                        hostname = socket.gethostname()
+                        host_ip = socket.gethostbyname(hostname)
+                    except:
+                        host_ip = '0.0.0.0'
+                else:
+                    host_ip = web_host
+
+                new_url = f"http://{host_ip}:{web_port}"
+
+                cursor.execute("""
+                    UPDATE settings
+                    SET xmltv_generator_url = ?
+                    WHERE id = 1
+                """, (new_url,))
+                conn.commit()
+                print(f"🔗 Set generator URL to {new_url}")
+
+    except Exception as e:
+        print(f"⚠️  Generator URL migration warning: {e}")
         # Don't fail startup if migration has issues
     finally:
         conn.close()
