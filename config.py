@@ -18,35 +18,62 @@ def get_version():
         - "X.Y.Z-dev+SHA" on dev branch with commit SHA (if git available)
     """
     version = BASE_VERSION
+    branch = None
+    sha = None
 
+    # First, try to read from Docker build-time files (created in Dockerfile)
     try:
-        # Try to get current git branch
-        git_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.git')
-        if os.path.exists(git_dir):
-            branch = subprocess.check_output(
-                ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
-                stderr=subprocess.DEVNULL,
-                text=True
-            ).strip()
+        branch_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.git-branch')
+        sha_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.git-sha')
 
-            # Add suffix for non-main branches
-            if branch == 'dev':
-                # Get short commit SHA
-                try:
-                    sha = subprocess.check_output(
-                        ['git', 'rev-parse', '--short', 'HEAD'],
-                        stderr=subprocess.DEVNULL,
-                        text=True
-                    ).strip()
-                    version = f"{BASE_VERSION}-dev+{sha}"
-                except:
-                    version = f"{BASE_VERSION}-dev"
-            elif branch not in ['main', 'master']:
-                # Other branches (feature/fix/etc)
-                version = f"{BASE_VERSION}-{branch}"
+        if os.path.exists(branch_file):
+            with open(branch_file, 'r') as f:
+                branch = f.read().strip()
+
+        if os.path.exists(sha_file):
+            with open(sha_file, 'r') as f:
+                sha = f.read().strip()
     except:
-        # Git not available or error - return base version
         pass
+
+    # Fallback to environment variables (also set in Dockerfile)
+    if not branch:
+        branch = os.environ.get('GIT_BRANCH')
+    if not sha:
+        sha = os.environ.get('GIT_SHA')
+
+    # Last fallback: try git commands (for development)
+    if not branch or branch == 'unknown':
+        try:
+            git_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.git')
+            if os.path.exists(git_dir):
+                branch = subprocess.check_output(
+                    ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+                    stderr=subprocess.DEVNULL,
+                    text=True
+                ).strip()
+
+                if not sha or sha == 'unknown':
+                    try:
+                        sha = subprocess.check_output(
+                            ['git', 'rev-parse', '--short', 'HEAD'],
+                            stderr=subprocess.DEVNULL,
+                            text=True
+                        ).strip()
+                    except:
+                        pass
+        except:
+            pass
+
+    # Build version string
+    if branch and branch != 'unknown':
+        if branch == 'dev':
+            if sha and sha != 'unknown':
+                version = f"{BASE_VERSION}-dev+{sha}"
+            else:
+                version = f"{BASE_VERSION}-dev"
+        elif branch not in ['main', 'master']:
+            version = f"{BASE_VERSION}-{branch}"
 
     return version
 

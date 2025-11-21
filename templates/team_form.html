@@ -1013,7 +1013,6 @@ document.addEventListener('DOMContentLoaded', async function() {
     initTabs();
     initTemplatePreview();
     renderConditions();  // Render conditions that were already initialized from template
-    updateHiddenInput();  // Sync hidden field with conditions array
     loadTeamsList();
 
     // Update previews on input
@@ -1444,7 +1443,6 @@ function addPresetToConditions(preset) {
         preset_id: preset.id
     });
     renderConditions();
-    updateHiddenInput();
     closePresetModal();
 }
 
