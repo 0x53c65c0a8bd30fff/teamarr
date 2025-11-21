@@ -37,6 +37,7 @@ def init_database():
     migrate_between_games_to_idle()
     migrate_timezone_from_env()
     migrate_generator_url_from_host_port()
+    migrate_game_duration_refactor()
 
 def migrate_team_ids_to_numeric():
     """
@@ -273,6 +274,60 @@ def migrate_generator_url_from_host_port():
 
     except Exception as e:
         print(f"⚠️  Generator URL migration warning: {e}")
+        # Don't fail startup if migration has issues
+    finally:
+        conn.close()
+
+def migrate_game_duration_refactor():
+    """
+    Migrate game duration from single field to mode + override system.
+
+    Changes:
+    - Add game_duration_mode column (default, sport, custom)
+    - Add game_duration_override column (replaces old game_duration)
+    - Add game_duration_default to settings table (global default)
+    - Remove video_quality and audio_quality (unused fields)
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        # Check if migration already ran
+        cursor.execute("PRAGMA table_info(teams)")
+        columns = [col[1] for col in cursor.fetchall()]
+
+        if 'game_duration_mode' in columns:
+            # Migration already ran
+            return
+
+        # Add game_duration_mode column
+        cursor.execute("ALTER TABLE teams ADD COLUMN game_duration_mode TEXT DEFAULT 'default'")
+
+        # Add game_duration_override column
+        cursor.execute("ALTER TABLE teams ADD COLUMN game_duration_override REAL")
+
+        # Migrate existing game_duration values
+        # If game_duration exists and is not the default (3.0), treat as custom override
+        if 'game_duration' in columns:
+            cursor.execute("""
+                UPDATE teams
+                SET game_duration_mode = 'custom',
+                    game_duration_override = game_duration
+                WHERE game_duration IS NOT NULL AND game_duration != 3.0
+            """)
+
+        # Add game_duration_default to settings
+        cursor.execute("PRAGMA table_info(settings)")
+        settings_columns = [col[1] for col in cursor.fetchall()]
+
+        if 'game_duration_default' not in settings_columns:
+            cursor.execute("ALTER TABLE settings ADD COLUMN game_duration_default REAL DEFAULT 4.0")
+
+        conn.commit()
+        print("✅ Game duration migration completed")
+
+    except Exception as e:
+        print(f"⚠️  Game duration migration warning: {e}")
         # Don't fail startup if migration has issues
     finally:
         conn.close()

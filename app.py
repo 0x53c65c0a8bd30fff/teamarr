@@ -417,10 +417,10 @@ def add_team():
             INSERT INTO teams (
                 espn_team_id, league, sport, team_name, team_abbrev,
                 team_logo_url, team_color, channel_id, title_format,
-                description_template, subtitle_template, game_duration,
-                timezone, flags, categories, video_quality, audio_quality,
+                description_template, subtitle_template, game_duration_mode, game_duration_override,
+                timezone, flags, categories,
                 description_options
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             data['espn_team_id'],
             data['league'],
@@ -433,12 +433,11 @@ def add_team():
             data.get('title_format', '{team_name} Basketball'),
             data.get('description_template', ''),
             data.get('subtitle_template', '{venue_full}'),
-            float(data.get('game_duration', 3.0)),
+            data.get('game_duration_mode', 'default'),
+            float(data['game_duration_override']) if data.get('game_duration_override') else None,
             data.get('timezone', 'America/New_York'),
             json.dumps({'new': True, 'live': True}),
             json.dumps(categories_list),
-            data.get('video_quality', 'HDTV'),
-            data.get('audio_quality', 'stereo'),
             json.dumps(description_options)
         ))
 
@@ -520,8 +519,8 @@ def edit_team(team_id):
                 espn_team_id = ?, league = ?, sport = ?, team_name = ?,
                 team_abbrev = ?, team_logo_url = ?, team_color = ?,
                 channel_id = ?, title_format = ?, description_template = ?,
-                subtitle_template = ?, game_duration = ?, timezone = ?,
-                categories = ?, categories_apply_to = ?, video_quality = ?, audio_quality = ?, active = ?,
+                subtitle_template = ?, game_duration_mode = ?, game_duration_override = ?, timezone = ?,
+                categories = ?, categories_apply_to = ?, active = ?,
                 description_options = ?,
                 flags = ?,
                 no_game_enabled = ?, no_game_title = ?, no_game_description = ?, no_game_duration = ?,
@@ -536,10 +535,11 @@ def edit_team(team_id):
             data['espn_team_id'], data['league'], data['sport'], data['team_name'],
             data.get('team_abbrev', ''), data.get('team_logo_url', ''), data.get('team_color', ''),
             data['channel_id'], data.get('title_format'), data.get('description_template'),
-            data.get('subtitle_template'), float(data.get('game_duration', 3.0)),
+            data.get('subtitle_template'),
+            data.get('game_duration_mode', 'default'),
+            float(data['game_duration_override']) if data.get('game_duration_override') else None,
             data.get('timezone'), json.dumps(categories_list),
             data.get('categories_apply_to', 'events'),
-            data.get('video_quality'), data.get('audio_quality'),
             1 if data.get('active') == 'on' else 0,
             json.dumps(description_options),
             json.dumps(flags),
@@ -669,7 +669,8 @@ def get_team_templates(team_id):
         'description_options': team_dict.get('description_options', []),
         'flags': team_dict.get('flags', {'new': True, 'live': False, 'date': False, 'premiere': False}),
         'categories': team_dict.get('categories', []),
-        'game_duration': team_dict.get('game_duration', 3.0),
+        'game_duration_mode': team_dict.get('game_duration_mode', 'default'),
+        'game_duration_override': team_dict.get('game_duration_override'),
         'pregame_enabled': team_dict.get('pregame_enabled', True),
         'pregame_title': team_dict.get('pregame_title', ''),
         'pregame_description': team_dict.get('pregame_description', ''),
@@ -773,6 +774,37 @@ def get_variables():
         return jsonify({'error': 'Variables file not found'}), 404
     except json.JSONDecodeError as e:
         return jsonify({'error': f'Invalid JSON: {str(e)}'}), 500
+
+def get_game_duration(team, settings):
+    """
+    Get game duration for a team based on mode
+
+    Args:
+        team: Team dict with sport, game_duration_mode, and game_duration_override fields
+        settings: Settings dict with game_duration_default field
+
+    Returns:
+        float: Game duration in hours
+    """
+    mode = team.get('game_duration_mode', 'default')
+
+    if mode == 'custom':
+        # Use custom override
+        return float(team.get('game_duration_override', 4.0))
+    elif mode == 'sport':
+        # Use sport-specific recommendation
+        sport = team.get('sport', 'basketball').lower()
+        sport_defaults = {
+            'basketball': 3.0,
+            'football': 3.5,
+            'soccer': 2.0,
+            'baseball': 3.0,
+            'hockey': 3.0
+        }
+        return float(sport_defaults.get(sport, 3.0))
+    else:  # mode == 'default'
+        # Use global default from settings
+        return float(settings.get('game_duration_default', 4.0))
 
 @app.route('/generate', methods=['POST'])
 def generate_epg():
@@ -961,7 +993,7 @@ def generate_epg():
 
                     opponent_stats = opponent_stats_cache.get(opp_id, {})
 
-                    processed = _process_event(event, team, team_stats, opponent_stats, epg_timezone, schedule_data)
+                    processed = _process_event(event, team, team_stats, opponent_stats, epg_timezone, schedule_data, settings)
                     if processed:
                         processed_events.append(processed)
 
@@ -969,7 +1001,7 @@ def generate_epg():
                 extended_processed_events = []
                 for event in extended_events:
                     # For extended events, we don't need full opponent stats - just basic game data
-                    processed = _process_event(event, team, team_stats, {}, epg_timezone, schedule_data)
+                    processed = _process_event(event, team, team_stats, {}, epg_timezone, schedule_data, settings)
                     if processed:
                         extended_processed_events.append(processed)
 
@@ -2623,13 +2655,13 @@ def _calculate_h2h(our_team_id: str, opponent_id: str, schedule_data: dict) -> d
     }
 
 
-def _process_event(event: dict, team: dict, team_stats: dict = None, opponent_stats: dict = None, epg_timezone: str = 'America/New_York', schedule_data: dict = None) -> dict:
+def _process_event(event: dict, team: dict, team_stats: dict = None, opponent_stats: dict = None, epg_timezone: str = 'America/New_York', schedule_data: dict = None, settings: dict = None) -> dict:
     """Process a single event - add templates, calculate times"""
     # Parse game datetime
     game_datetime = datetime.fromisoformat(event['date'].replace('Z', '+00:00'))
 
-    # Calculate end time
-    game_duration_hours = team.get('game_duration', 3.0)
+    # Calculate end time using game duration helper
+    game_duration_hours = get_game_duration(team, settings or {})
     end_datetime = game_datetime + timedelta(hours=game_duration_hours)
 
     # Calculate h2h data

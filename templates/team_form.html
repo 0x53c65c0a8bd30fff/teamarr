@@ -516,9 +516,35 @@
                         </div>
 
                         <div class="form-group">
-                            <label for="game_duration">Game Duration (hours) *</label>
-                            <input type="number" name="game_duration" id="game_duration" step="0.5" min="1" max="6" value="{{ team.game_duration if team else 6.0 }}" required>
-                            <small class="help-text">NBA: 3.0, NFL: 3.5, Soccer: 2.0</small>
+                            <label>Game Duration (hours)</label>
+                            <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                                <label style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <input type="radio" name="game_duration_mode" value="default"
+                                           {% if not team or team.game_duration_mode == 'default' %}checked{% endif %}
+                                           onchange="updateGameDurationMode()">
+                                    <span>Use global default (4.0 hours)</span>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <input type="radio" name="game_duration_mode" value="sport"
+                                           {% if team and team.game_duration_mode == 'sport' %}checked{% endif %}
+                                           onchange="updateGameDurationMode()">
+                                    <span>Use recommended for sport (Basketball: 3.0, Football: 3.5, Soccer: 2.0, Baseball: 3.0, Hockey: 3.0)</span>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <input type="radio" name="game_duration_mode" value="custom"
+                                           {% if team and team.game_duration_mode == 'custom' %}checked{% endif %}
+                                           onchange="updateGameDurationMode()">
+                                    <span>Custom:</span>
+                                    <input type="number" name="game_duration_override" id="game_duration_override"
+                                           step="0.5" min="1" max="8"
+                                           value="{{ team.game_duration_override if team and team.game_duration_override else '' }}"
+                                           placeholder="e.g., 3.5"
+                                           {% if not team or team.game_duration_mode != 'custom' %}disabled{% endif %}
+                                           style="width: 100px;">
+                                    <span>hours</span>
+                                </label>
+                            </div>
+                            <small class="help-text">Choose how to set game duration for EPG programs</small>
                         </div>
 
                         <div class="form-group">
@@ -785,7 +811,7 @@
                     <input type="checkbox" value="categories" checked> Categories
                 </label>
                 <label class="field-checkbox-label">
-                    <input type="checkbox" value="game_duration" checked> Game Duration
+                    <input type="checkbox" value="game_duration_override" checked> Game Duration
                 </label>
                 <label class="field-checkbox-label">
                     <input type="checkbox" value="pregame_enabled" checked> Pregame Enabled
@@ -865,6 +891,21 @@ let teamsCache = [];
 // Conditions will be stored directly in the DOM as form inputs (no hidden field)
 let conditions = {{ description_options_json | default('[]') | safe }};
 let conditionCounter = 0;
+
+// ============================================================================
+// GAME DURATION MODE TOGGLE
+// ============================================================================
+function updateGameDurationMode() {
+    const customRadio = document.querySelector('input[name="game_duration_mode"][value="custom"]');
+    const input = document.getElementById('game_duration_override');
+
+    if (customRadio && customRadio.checked) {
+        input.disabled = false;
+        input.focus();
+    } else {
+        input.disabled = true;
+    }
+}
 
 // Sample data for preview - will be populated from API
 let sampleData = {
@@ -1305,6 +1346,28 @@ async function applyCopyTemplates() {
                 const element = document.getElementById(field);
                 if (element && templates[field] !== undefined) {
                     element.checked = templates[field];
+                }
+            } else if (field === 'game_duration_mode') {
+                // Handle game duration mode
+                const mode = templates['game_duration_mode'] || 'default';
+                const modeRadio = document.querySelector(`input[name="game_duration_mode"][value="${mode}"]`);
+                const overrideInput = document.getElementById('game_duration_override');
+
+                if (modeRadio) {
+                    modeRadio.checked = true;
+                }
+
+                // Set override value if mode is custom
+                if (mode === 'custom' && templates['game_duration_override']) {
+                    if (overrideInput) {
+                        overrideInput.disabled = false;
+                        overrideInput.value = templates['game_duration_override'];
+                    }
+                } else {
+                    if (overrideInput) {
+                        overrideInput.disabled = (mode !== 'custom');
+                        overrideInput.value = templates['game_duration_override'] || '';
+                    }
                 }
             } else {
                 const element = document.getElementById(field);
