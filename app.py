@@ -2688,13 +2688,15 @@ def _process_event(event: dict, team: dict, team_stats: dict = None, opponent_st
     game_duration_hours = get_game_duration(team, settings or {})
     end_datetime = game_datetime + timedelta(hours=game_duration_hours)
 
+    # Get our team ID (needed for various lookups)
+    our_team_id = str(team.get('espn_team_id', ''))
+
     # Calculate h2h data
     h2h = {}
     if schedule_data:
         # Identify opponent from event
         home_team = event.get('home_team', {})
         away_team = event.get('away_team', {})
-        our_team_id = str(team.get('espn_team_id', ''))
 
         is_home = str(home_team.get('id', '')) == our_team_id
         opponent = away_team if is_home else home_team
