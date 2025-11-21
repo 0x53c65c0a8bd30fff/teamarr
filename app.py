@@ -669,6 +669,7 @@ def get_team_templates(team_id):
         'description_options': team_dict.get('description_options', []),
         'flags': team_dict.get('flags', {'new': True, 'live': False, 'date': False, 'premiere': False}),
         'categories': team_dict.get('categories', []),
+        'game_duration': team_dict.get('game_duration', 3.0),
         'pregame_enabled': team_dict.get('pregame_enabled', True),
         'pregame_title': team_dict.get('pregame_title', ''),
         'pregame_description': team_dict.get('pregame_description', ''),

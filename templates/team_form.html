@@ -785,10 +785,19 @@
                     <input type="checkbox" value="categories" checked> Categories
                 </label>
                 <label class="field-checkbox-label">
+                    <input type="checkbox" value="game_duration" checked> Game Duration
+                </label>
+                <label class="field-checkbox-label">
+                    <input type="checkbox" value="pregame_enabled" checked> Pregame Enabled
+                </label>
+                <label class="field-checkbox-label">
                     <input type="checkbox" value="pregame_title" checked> Pregame Title
                 </label>
                 <label class="field-checkbox-label">
                     <input type="checkbox" value="pregame_description" checked> Pregame Description
+                </label>
+                <label class="field-checkbox-label">
+                    <input type="checkbox" value="postgame_enabled" checked> Postgame Enabled
                 </label>
                 <label class="field-checkbox-label">
                     <input type="checkbox" value="postgame_title" checked> Postgame Title
@@ -1290,6 +1299,12 @@ async function applyCopyTemplates() {
                 if (element && templates.flags) {
                     const flagKey = field.replace('include_', '').replace('_tag', '');
                     element.checked = templates.flags[flagKey] || false;
+                }
+            } else if (field === 'pregame_enabled' || field === 'postgame_enabled') {
+                // Handle pregame/postgame enabled checkboxes
+                const element = document.getElementById(field);
+                if (element && templates[field] !== undefined) {
+                    element.checked = templates[field];
                 }
             } else {
                 const element = document.getElementById(field);
