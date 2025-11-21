@@ -1143,7 +1143,7 @@ async function applyCopyTemplates() {
         closeCopyModal();
 
         // Show success feedback
-        showNotification('Templates copied successfully!', 'success');
+        showNotification('Templates copied! Click "Save Team" to apply changes.', 'success', 5000);
     } catch (error) {
         console.error('Failed to copy templates:', error);
         showNotification(`Failed to copy templates: ${error.message}`, 'error');

@@ -1094,19 +1094,32 @@ def parse_espn_url():
     # For soccer, we need to detect the actual league from team data
     # since the URL doesn't specify (could be EPL, EFL, NWSL, MLS, etc.)
     if team_info['sport'] == 'soccer':
+        # Map API paths to league codes (from league_config table)
+        api_path_to_league_code = {
+            'usa.1': 'mls',
+            'usa.w.1': 'nwsl',
+            'eng.1': 'epl',
+            'eng.2': 'efl',
+            'esp.1': 'laliga',
+            'ger.1': 'bundesliga',
+            'ita.1': 'seriea',
+            'fra.1': 'ligue1'
+        }
+
         # Try multiple possible leagues to find the team
-        possible_leagues = ['eng.1', 'eng.2', 'usa.1', 'usa.w.1', 'esp.1', 'ger.1', 'ita.1', 'fra.1']
+        possible_api_paths = ['usa.1', 'usa.w.1', 'eng.1', 'eng.2', 'esp.1', 'ger.1', 'ita.1', 'fra.1']
         team_data = None
 
-        for league in possible_leagues:
+        for api_path in possible_api_paths:
             test_data = espn.get_team_info(
                 team_info['sport'],
-                league,
+                api_path,
                 team_info['team_slug']
             )
             if test_data and 'team' in test_data:
                 team_data = test_data
-                team_info['league'] = league
+                # Map API path back to league code
+                team_info['league'] = api_path_to_league_code.get(api_path, api_path)
                 break
 
         if not team_data:

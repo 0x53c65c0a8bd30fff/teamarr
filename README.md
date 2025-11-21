@@ -2,7 +2,7 @@
 
 **Transform ESPN's sports schedules into professional XMLTV EPG files for your IPTV system.**
 
-Self-hosted sports EPG generator with support for 13 major leagues (NBA, NFL, MLB, NHL, MLS, EPL, La Liga, Bundesliga, Serie A, Ligue 1, NCAA Football, NCAA Men's/Women's Basketball) and 188+ template variables.
+Self-hosted sports EPG generator with support for 15 major leagues (NBA, NFL, MLB, NHL, MLS, NWSL, EPL, EFL Championship, La Liga, Bundesliga, Serie A, Ligue 1, NCAA Football, NCAA Men's/Women's Basketball) and 188+ template variables.
 
 ---
 
@@ -39,7 +39,7 @@ services:
 
 ## Features
 
-- **13 Major Leagues**: NBA, NFL, MLB, NHL, MLS, EPL, La Liga, Bundesliga, Serie A, Ligue 1, NCAA Football, NCAA Men's/Women's Basketball
+- **15 Major Leagues**: NBA, NFL, MLB, NHL, MLS, NWSL, EPL, EFL Championship, La Liga, Bundesliga, Serie A, Ligue 1, NCAA Football, NCAA Men's/Women's Basketball
 - **150+ Template Variables**: Team records, win streaks, head-to-head stats, player performance, and more
 - **Conditional Descriptions**: Dynamic content based on team performance, rankings, and rivalries
 - **Gracenote-Standard EPG**: Professional quality XMLTV following industry best practices
@@ -88,8 +88,7 @@ Can the {team_name} snap their {loss_streak} game losing streak against {opponen
 
 | Path | Description |
 |------|-------------|
-| `/app/database` | SQLite database and configuration |
-| `/app/output` | Generated XMLTV EPG files |
+| `/app/data` | SQLite database, configuration, and generated XMLTV files |
 
 ---
 
