@@ -1120,8 +1120,12 @@ def parse_espn_url():
         # Use the full team slug (e.g., "detroit-pistons") instead of just mascot
         channel_id = f"{team_info['team_slug']}.{team_info['league']}"
 
+        # Use numeric team ID from ESPN API for espn_team_id (needed for schedule matching)
+        # The numeric ID is what ESPN uses in schedule/game data
+        team_id = str(team.get('id', team_info['team_slug']))
+
         return jsonify({
-            'espn_team_id': team_info['team_slug'],
+            'espn_team_id': team_id,
             'league': team_info['league'],
             'sport': team_info['sport'],
             'team_name': team.get('displayName', ''),
