@@ -2484,7 +2484,7 @@ def _extract_player_leaders(competition: dict, team_id: str, league: str) -> dic
         return {}
 
     leaders_data = competitor['leaders']
-    if not leaders_data:
+    if not leaders_data or not isinstance(leaders_data, list) or len(leaders_data) == 0:
         return {}
 
     # Determine game status
