@@ -834,10 +834,11 @@ def generate_epg():
 
         epg_timezone = settings.get('default_timezone', 'America/New_York')
 
-        # Calculate EPG start date (today in EPG timezone)
+        # Calculate EPG start date (yesterday in EPG timezone)
+        # Start from yesterday to catch games that may have crossed midnight into today
         from zoneinfo import ZoneInfo
         epg_tz = ZoneInfo(epg_timezone)
-        epg_start_date = datetime.now(epg_tz).date()
+        epg_start_date = (datetime.now(epg_tz) - timedelta(days=1)).date()
 
         # Fetch schedules for each team
         all_events = {}
