@@ -1864,7 +1864,8 @@ def _create_filler_chunks(start_dt: datetime, end_dt: datetime, max_hours: int,
                 'time': time_formatted,
                 'datetime': datetime_str,
                 'matchup': matchup,
-                'venue': raw_game.get('venue', {}).get('name', '')
+                'venue': raw_game.get('venue', {}).get('name', ''),
+                'is_home': is_home
             }
 
     # Add last_game context if available
@@ -1978,6 +1979,7 @@ def _create_filler_chunks(start_dt: datetime, end_dt: datetime, max_hours: int,
             'result': result,
             'score': f"{team_score}-{opp_score}",
             'score_abbrev': score_abbrev,
+            'is_home': is_home,
             **last_game_leaders  # Merge in player leader stats
         }
         # Store raw event for today_game logic
