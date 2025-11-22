@@ -39,141 +39,19 @@ def run_scheduled_generation():
     try:
         print(f"🕐 Scheduled EPG generation started at {datetime.now()}")
 
-        # Import here to avoid circular dependency
+        # Call the generate_epg endpoint internally using test client
         with app.app_context():
-            conn = get_connection()
+            with app.test_client() as client:
+                # Make internal POST request to /generate endpoint
+                response = client.post('/generate', data={'days_ahead': ''})
 
-            # Get active teams
-            teams = conn.execute("""
-                SELECT t.*, lc.league_name, lc.api_path, lc.default_category as league_category
-                FROM teams t
-                LEFT JOIN league_config lc ON t.league = lc.league_code
-                WHERE t.active = 1
-                ORDER BY t.team_name
-            """).fetchall()
-
-            # Get settings
-            settings = dict(conn.execute("SELECT * FROM settings WHERE id = 1").fetchone())
-            epg_timezone = settings.get('default_timezone', 'America/New_York')
-
-            conn.close()
-
-            if not teams:
-                print("⚠️  No active teams configured. Skipping EPG generation.")
-                return
-
-            # Trigger generation via internal route logic
-            # We'll call the generation logic directly
-            from datetime import datetime as dt
-            start_time = dt.now()
-
-            conn = get_connection()
-
-            try:
-                # Convert teams to dict and parse JSON fields
-                teams_list = []
-                for t in teams:
-                    team_dict = dict(t)
-                    # Parse JSON fields
-                    if team_dict.get('flags') and isinstance(team_dict['flags'], str):
-                        team_dict['flags'] = json.loads(team_dict['flags'])
-                    if team_dict.get('categories') and isinstance(team_dict['categories'], str):
-                        team_dict['categories'] = json.loads(team_dict['categories'])
-                    if team_dict.get('description_options') and isinstance(team_dict['description_options'], str):
-                        team_dict['description_options'] = json.loads(team_dict['description_options'])
-                    teams_list.append(team_dict)
-
-                all_events = {}
-                api_calls = 0
-                days_ahead = settings.get('epg_days_ahead', 14)
-
-                for team in teams_list:
-                    team_stats = espn.get_team_stats(team['sport'], team['league'], team['espn_team_id'])
-                    api_calls += 1
-
-                    team_data = espn.get_team_info(team['sport'], team['league'], team['espn_team_id'])
-                    api_calls += 1
-
-                    # Extract team logo from ESPN data if not already set
-                    if team_data and 'team' in team_data and not team.get('team_logo_url'):
-                        logos = team_data['team'].get('logos', [])
-                        if logos and len(logos) > 0:
-                            team['team_logo_url'] = logos[0].get('href', '')
-
-                    schedule_data = espn.get_team_schedule(
-                        team['sport'],
-                        team['league'],
-                        team['espn_team_id'],
-                        days_ahead
-                    )
-                    api_calls += 1
-
-                    if schedule_data:
-                        events = espn.parse_schedule_events(schedule_data, days_ahead)
-                        processed_events = []
-
-                        for event in events:
-                            our_team_id = str(team_data.get('team', {}).get('id', '')) if team_data else ''
-                            home_team = event.get('home_team', {})
-                            away_team = event.get('away_team', {})
-
-                            is_home = str(home_team.get('id', '')) == our_team_id
-                            opponent = away_team if is_home else home_team
-
-                            # Fetch opponent stats (including record)
-                            opponent_stats = {}
-                            opp_id = opponent.get('id', '')
-                            if opp_id:
-                                opponent_stats = espn.get_team_stats(team['sport'], team['league'], str(opp_id))
-                                api_calls += 1
-
-                            processed = _process_event(event, team, team_stats, opponent_stats, epg_timezone)
-                            if processed:
-                                processed_events.append(processed)
-
-                        all_events[str(team['id'])] = processed_events
-
-                xml_content = xmltv_gen.generate(teams_list, all_events, settings)
-
-                output_path = '/app/data/teamarr.xml'
-                os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-                with open(output_path, 'w', encoding='utf-8') as f:
-                    f.write(xml_content)
-
-                file_size = os.path.getsize(output_path)
-                file_hash = xmltv_gen.calculate_file_hash(xml_content)
-                generation_time = (dt.now() - start_time).total_seconds()
-                total_programmes = sum(len(events) for events in all_events.values())
-
-                conn.execute("""
-                    INSERT INTO epg_history (
-                        file_path, file_size, num_channels, num_programmes,
-                        generation_time_seconds, api_calls_made, file_hash, status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    output_path, file_size, len(teams_list), total_programmes,
-                    generation_time, api_calls, file_hash, 'success'
-                ))
-
-                conn.commit()
-                print(f"✅ Scheduled EPG generation completed: {total_programmes} programs from {len(teams_list)} teams in {generation_time:.2f}s")
-
-            except Exception as e:
-                import traceback
-                print(f"❌ Scheduled EPG generation failed: {e}")
-                traceback.print_exc()
-                try:
-                    conn.execute("""
-                        INSERT INTO error_log (level, category, message, details)
-                        VALUES (?, ?, ?, ?)
-                    """, ('ERROR', 'GENERATION', str(e), json.dumps({'context': 'Auto-generation scheduler'})))
-                    conn.commit()
-                except Exception as log_error:
-                    print(f"❌ Failed to log error: {log_error}")
-
-            finally:
-                conn.close()
+                if response.status_code == 200:
+                    result = response.get_json()
+                    print(f"✅ Scheduled EPG generation completed: {result.get('num_programmes', 0)} programs from {result.get('num_channels', 0)} teams in {result.get('generation_time', 0):.2f}s")
+                else:
+                    error_data = response.get_json() if response.content_type == 'application/json' else {}
+                    error_msg = error_data.get('error', 'Unknown error')
+                    print(f"❌ Scheduled EPG generation failed: {error_msg}")
 
     except Exception as e:
         print(f"❌ Scheduler error: {e}")
