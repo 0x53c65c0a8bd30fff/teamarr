@@ -1739,12 +1739,18 @@ def _extract_team_form_data(form):
 if __name__ == '__main__':
     # Start the auto-generation scheduler
     # Only start in main process, not in werkzeug reloader process
-    if os.environ.get('WERKZEUG_RUN_MAIN') == 'true' or not app.debug:
+    # In Docker/production, WERKZEUG_RUN_MAIN won't be set, so check differently
+    import sys
+    is_reloader = sys.argv[0].endswith('flask') and '--reloader' in ' '.join(sys.argv)
+    is_werkzeug_child = os.environ.get('WERKZEUG_RUN_MAIN') == 'true'
+
+    # Start scheduler only if: not running from reloader, OR we're the werkzeug child process
+    if not is_reloader or is_werkzeug_child:
         start_scheduler()
 
     try:
         port = int(os.environ.get('PORT', 9195))
-        app.run(host='0.0.0.0', port=port, debug=True)
+        app.run(host='0.0.0.0', port=port, debug=True, use_reloader=False)  # Disable reloader to prevent duplicates
     except KeyboardInterrupt:
         stop_scheduler()
         print("👋 Goodbye!")
