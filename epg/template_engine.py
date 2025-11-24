@@ -11,6 +11,34 @@ class TemplateEngine:
     def __init__(self):
         pass
 
+    def _determine_home_away(self, event: dict, our_team_id: str, use_name_fallback: bool = True) -> tuple[bool, dict, dict]:
+        """
+        Determine if our team is home/away and identify opponent
+
+        Args:
+            event: Event with home_team and away_team
+            our_team_id: Our team's ESPN ID
+            use_name_fallback: If True, also check team name as fallback (default True for template compatibility)
+
+        Returns:
+            (is_home, our_team, opponent) tuple
+        """
+        home_team = event.get('home_team', {})
+        away_team = event.get('away_team', {})
+
+        # Determine if our team is home
+        is_home = str(home_team.get('id')) == str(our_team_id)
+
+        # Apply name fallback if requested
+        if use_name_fallback and not is_home:
+            is_home = home_team.get('name', '').lower().replace(' ', '-') == our_team_id
+
+        # Determine our team and opponent
+        our_team = home_team if is_home else away_team
+        opponent = away_team if is_home else home_team
+
+        return (is_home, our_team, opponent)
+
     def resolve(self, template: str, context: Dict[str, Any]) -> str:
         """
         Resolve all template variables in a string with support for .next and .last suffixes
@@ -96,10 +124,7 @@ class TemplateEngine:
 
         # Determine which team is "ours"
         our_team_id = team_config.get('espn_team_id', '')
-        is_home = str(home_team.get('id')) == str(our_team_id) or home_team.get('name', '').lower().replace(' ', '-') == our_team_id
-
-        our_team = home_team if is_home else away_team
-        opponent = away_team if is_home else home_team
+        is_home, our_team, opponent = self._determine_home_away(game, our_team_id)
 
         # Use team_config as fallback when game data is not available
         variables['team_name'] = our_team.get('name', '') or team_config.get('team_name', '')
@@ -1043,12 +1068,8 @@ class TemplateEngine:
         team_config = context.get('team_config', {})
 
         # Extract teams
-        home_team = game.get('home_team', {})
-        away_team = game.get('away_team', {})
         our_team_id = team_config.get('espn_team_id', '')
-        is_home = str(home_team.get('id')) == str(our_team_id) or home_team.get('name', '').lower().replace(' ', '-') == our_team_id
-        our_team = home_team if is_home else away_team
-        opponent = away_team if is_home else home_team
+        is_home, our_team, opponent = self._determine_home_away(game, our_team_id)
 
         # Performance conditions
         # ESPN returns positive integers for win streaks, negative for loss streaks

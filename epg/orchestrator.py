@@ -247,6 +247,180 @@ class EPGOrchestrator:
         finally:
             conn.close()
 
+    def _normalize_scoreboard_broadcasts(self, competition: dict) -> dict:
+        """
+        Normalize scoreboard broadcast format to match schedule format
+
+        Args:
+            competition: Competition dict with broadcasts array
+
+        Returns:
+            Competition dict with normalized broadcasts
+        """
+        if 'broadcasts' not in competition:
+            return competition
+
+        normalized_broadcasts = []
+        for b in competition['broadcasts']:
+            if isinstance(b, dict) and 'market' in b and isinstance(b['market'], str):
+                # This is scoreboard format - normalize it
+                market_str = b['market']
+                market_type = market_str.capitalize()
+                network_name = b.get('names', [None])[0]
+
+                # Convert to schedule format
+                normalized = {
+                    'type': {'id': '1', 'shortName': 'TV'},
+                    'market': {'type': market_type},
+                    'media': {'shortName': network_name} if network_name else {}
+                }
+                normalized_broadcasts.append(normalized)
+            else:
+                # Already in schedule format, keep as-is
+                normalized_broadcasts.append(b)
+
+        competition['broadcasts'] = normalized_broadcasts
+        return competition
+
+    def _get_api_path(self, team: dict) -> tuple[str, str]:
+        """
+        Determine API sport and league from team configuration
+
+        Args:
+            team: Team configuration dict
+
+        Returns:
+            (api_sport, api_league) tuple
+        """
+        if team.get('api_path'):
+            api_parts = team['api_path'].split('/', 1)
+            api_sport = api_parts[0]
+            api_league = api_parts[1] if len(api_parts) > 1 else team['league']
+        else:
+            api_sport = team['sport']
+            api_league = team['league']
+        return (api_sport, api_league)
+
+    def _determine_home_away(self, event: dict, our_team_id: str, use_name_fallback: bool = False) -> tuple[bool, dict, str]:
+        """
+        Determine if our team is home/away and identify opponent
+
+        Args:
+            event: Event with home_team and away_team
+            our_team_id: Our team's ESPN ID
+            use_name_fallback: If True, also check team name as fallback (for template_engine compatibility)
+
+        Returns:
+            (is_home, opponent, opponent_id) tuple
+        """
+        home_team = event.get('home_team', {})
+        away_team = event.get('away_team', {})
+
+        # Determine if our team is home
+        is_home = str(home_team.get('id', '')) == str(our_team_id)
+
+        # Apply name fallback if requested (template_engine uses this)
+        if use_name_fallback and not is_home:
+            is_home = home_team.get('name', '').lower().replace(' ', '-') == our_team_id
+
+        # Determine opponent
+        opponent = away_team if is_home else home_team
+        opponent_id = str(opponent.get('id', ''))
+
+        return (is_home, opponent, opponent_id)
+
+    def _enrich_event_from_scoreboard_lookup(
+        self,
+        event: dict,
+        scoreboard_lookup: dict,
+        normalize_broadcasts: bool = True,
+        set_odds_flag: bool = False
+    ) -> bool:
+        """
+        Enrich a single event using pre-fetched scoreboard lookup
+
+        Args:
+            event: Event to enrich (modified in place)
+            scoreboard_lookup: Dict mapping event ID to scoreboard event
+            normalize_broadcasts: Whether to normalize broadcast format
+            set_odds_flag: Whether to set has_odds flag on event
+
+        Returns:
+            True if event was enriched, False otherwise
+        """
+        event_id = event.get('id')
+        if event_id not in scoreboard_lookup:
+            return False
+
+        scoreboard_event = scoreboard_lookup[event_id]
+
+        # Merge scoreboard data
+        if 'competitions' in scoreboard_event:
+            comp = scoreboard_event['competitions'][0] if scoreboard_event['competitions'] else {}
+
+            # Normalize broadcasts if requested
+            if normalize_broadcasts:
+                self._normalize_scoreboard_broadcasts(comp)
+
+            # Merge full competition data
+            event['competitions'] = scoreboard_event['competitions']
+
+            # Set odds flag if requested
+            if set_odds_flag:
+                event['has_odds'] = bool(comp.get('odds'))
+
+        # Merge other scoreboard-specific fields
+        for key in ['uid', 'season', 'status']:
+            if key in scoreboard_event:
+                event[key] = scoreboard_event[key]
+
+        return True
+
+    def _fetch_and_enrich_event_with_scoreboard(
+        self,
+        event: dict,
+        date_str: str,
+        api_sport: str,
+        api_league: str,
+        normalize_broadcasts: bool = True,
+        set_odds_flag: bool = False
+    ) -> Optional[dict]:
+        """
+        Fetch scoreboard data for a specific date and enrich a single event
+
+        Args:
+            event: Event to enrich
+            date_str: Date string in YYYYMMDD format
+            api_sport: Sport type for API call
+            api_league: League code for API call
+            normalize_broadcasts: Whether to normalize broadcast format (default True)
+            set_odds_flag: Whether to set has_odds flag on event (default False)
+
+        Returns:
+            Enriched event dict, or None if scoreboard data not found
+        """
+        try:
+            # Fetch scoreboard for date
+            scoreboard_data = self.espn.get_scoreboard(api_sport, api_league, date_str)
+
+            if not scoreboard_data or 'events' not in scoreboard_data:
+                return None
+
+            # Parse scoreboard events
+            scoreboard_events = self.espn.parse_schedule_events(scoreboard_data, 1)
+
+            # Create lookup and enrich
+            scoreboard_lookup = {e['id']: e for e in scoreboard_events}
+            if self._enrich_event_from_scoreboard_lookup(event, scoreboard_lookup, normalize_broadcasts, set_odds_flag):
+                return event
+
+            # Event not found in scoreboard
+            return None
+
+        except Exception as e:
+            logger.warning(f"Error enriching event with scoreboard: {e}")
+            return None
+
     def _calculate_epg_start_time(self, teams_list: List[Dict[str, Any]], epg_timezone: str, settings: Dict[str, Any], lookback_hours: int = 6) -> Optional[datetime]:
         """
         Calculate EPG start time by checking for any games in the last N hours.
@@ -270,13 +444,7 @@ class EPGOrchestrator:
 
         for team in teams_list:
             # Determine API path
-            if team.get('api_path'):
-                api_parts = team['api_path'].split('/', 1)
-                api_sport = api_parts[0]
-                api_league = api_parts[1] if len(api_parts) > 1 else team['league']
-            else:
-                api_sport = team['sport']
-                api_league = team['league']
+            api_sport, api_league = self._get_api_path(team)
 
             # Fetch schedule (ESPN returns full schedule, we filter it)
             schedule_data = self.espn.get_team_schedule(
@@ -343,15 +511,7 @@ class EPGOrchestrator:
         """
         # Determine correct API path (sport/league) for ESPN API calls
         # Use api_path from league_config if available, otherwise fall back to team's sport/league
-        if team.get('api_path'):
-            # api_path format: "soccer/eng.1" -> split into sport and league
-            api_parts = team['api_path'].split('/', 1)
-            api_sport = api_parts[0]
-            api_league = api_parts[1] if len(api_parts) > 1 else team['league']
-        else:
-            # Fallback to team's direct sport/league fields
-            api_sport = team['sport']
-            api_league = team['league']
+        api_sport, api_league = self._get_api_path(team)
 
         # Fetch team stats (record, standings, etc.)
         team_data = self.espn.get_team_info(api_sport, api_league, team['espn_team_id'])
@@ -434,13 +594,8 @@ class EPGOrchestrator:
         for event in events:
             # Identify opponent
             our_team_id = str(team_data.get('team', {}).get('id', '')) if team_data else ''
-            home_team = event.get('home_team', {})
-            away_team = event.get('away_team', {})
-
             # Determine which team is the opponent
-            is_home = str(home_team.get('id', '')) == our_team_id
-            opponent = away_team if is_home else home_team
-            opp_id = opponent.get('id', '')
+            is_home, opponent, opp_id = self._determine_home_away(event, our_team_id)
 
             # Fetch opponent stats if not already in cache
             if opp_id and opp_id not in opponent_stats_cache:
@@ -510,13 +665,7 @@ class EPGOrchestrator:
             List of enriched events (today's games have scoreboard data merged)
         """
         # Determine correct API path (sport/league) for ESPN API calls
-        if team.get('api_path'):
-            api_parts = team['api_path'].split('/', 1)
-            api_sport = api_parts[0]
-            api_league = api_parts[1] if len(api_parts) > 1 else team['league']
-        else:
-            api_sport = team['sport']
-            api_league = team['league']
+        api_sport, api_league = self._get_api_path(team)
 
         # Get today's date string in USER'S timezone (not UTC!)
         user_tz = ZoneInfo(epg_timezone)
@@ -559,58 +708,15 @@ class EPGOrchestrator:
         scoreboard_lookup = {e['id']: e for e in scoreboard_events}
 
         # Merge scoreboard data into schedule events
-        enriched_events = []
         enriched_count = 0
         for event in events:
-            event_id = event.get('id')
-
-            # If this event has scoreboard data, merge it
-            if event_id in scoreboard_lookup:
-                scoreboard_event = scoreboard_lookup[event_id]
-
-                # Deep merge: scoreboard competitions have priority
-                if 'competitions' in scoreboard_event:
-                    event['competitions'] = scoreboard_event['competitions']
-
-                    # Normalize scoreboard broadcast format to match schedule format
-                    comp = scoreboard_event['competitions'][0] if scoreboard_event['competitions'] else {}
-                    if 'broadcasts' in comp:
-                        normalized_broadcasts = []
-                        for b in comp['broadcasts']:
-                            if isinstance(b, dict) and 'market' in b and isinstance(b['market'], str):
-                                # This is scoreboard format - normalize it
-                                market_str = b['market']
-                                market_type = market_str.capitalize()
-                                network_name = b.get('names', [None])[0]
-
-                                # Convert to schedule format
-                                normalized = {
-                                    'type': {'id': '1', 'shortName': 'TV'},
-                                    'market': {'type': market_type},
-                                    'media': {'shortName': network_name} if network_name else {}
-                                }
-                                normalized_broadcasts.append(normalized)
-                            else:
-                                # Already in schedule format, keep as-is
-                                normalized_broadcasts.append(b)
-
-                        comp['broadcasts'] = normalized_broadcasts
-
-                    # Check if we got odds and SET THE FLAG ON THE EVENT
-                    has_odds = bool(comp.get('odds'))
-                    event['has_odds'] = has_odds
-                    logger.debug(f"Enriched event {event_id}: has_odds={has_odds}")
-                    enriched_count += 1
-
-                # Also merge any other scoreboard-specific fields at event level
-                for key in ['uid', 'season', 'status']:
-                    if key in scoreboard_event:
-                        event[key] = scoreboard_event[key]
-
-            enriched_events.append(event)
+            # Enrich using helper function (set odds flag for today's games)
+            if self._enrich_event_from_scoreboard_lookup(event, scoreboard_lookup, normalize_broadcasts=True, set_odds_flag=True):
+                logger.debug(f"Enriched event {event.get('id')}: has_odds={event.get('has_odds', False)}")
+                enriched_count += 1
 
         logger.info(f"Enriched {enriched_count}/{len(events)} events with scoreboard data")
-        return enriched_events
+        return events
 
     def _enrich_past_events_with_scores(
         self,
@@ -630,13 +736,7 @@ class EPGOrchestrator:
             List of events with scores updated
         """
         # Determine correct API path (sport/league) for ESPN API calls
-        if team.get('api_path'):
-            api_parts = team['api_path'].split('/', 1)
-            api_sport = api_parts[0]
-            api_league = api_parts[1] if len(api_parts) > 1 else team['league']
-        else:
-            api_sport = team['sport']
-            api_league = team['league']
+        api_sport, api_league = self._get_api_path(team)
 
         now_utc = datetime.now(ZoneInfo('UTC'))
 
@@ -668,35 +768,17 @@ class EPGOrchestrator:
 
         # Fetch scoreboards for last 7 days (to control API calls)
         for date_str in sorted(past_by_date.keys(), reverse=True)[:7]:
-            scoreboard = self.espn.get_scoreboard(api_sport, api_league, date_str)
+            scoreboard_data = self.espn.get_scoreboard(api_sport, api_league, date_str)
             self.api_calls += 1
 
-            if scoreboard and 'events' in scoreboard:
-                for sb_event in scoreboard['events']:
-                    event_id = str(sb_event.get('id', ''))
-                    for our_event in past_by_date[date_str]:
-                        if str(our_event.get('id', '')) == event_id:
-                            # Update scores from scoreboard data
-                            if 'competitions' in sb_event and len(sb_event['competitions']) > 0:
-                                sb_competitors = sb_event['competitions'][0].get('competitors', [])
-                                for sb_comp in sb_competitors:
-                                    team_id = str(sb_comp.get('team', {}).get('id', ''))
-                                    score = sb_comp.get('score')
+            if scoreboard_data and 'events' in scoreboard_data:
+                # Parse scoreboard events
+                scoreboard_events = self.espn.parse_schedule_events(scoreboard_data, 1)
+                scoreboard_lookup = {e['id']: e for e in scoreboard_events}
 
-                                    # Update score in our event's home/away teams
-                                    if our_event['home_team']['id'] == team_id:
-                                        our_event['home_team']['score'] = score
-                                    elif our_event['away_team']['id'] == team_id:
-                                        our_event['away_team']['score'] = score
-
-                                # Update status to mark as completed
-                                sb_status = sb_event['competitions'][0].get('status', {})
-                                if sb_status and 'type' in sb_status:
-                                    our_event['status']['name'] = sb_status['type'].get('name', our_event['status'].get('name', ''))
-                                    our_event['status']['state'] = sb_status['type'].get('state', our_event['status'].get('state', ''))
-                                    our_event['status']['completed'] = sb_status['type'].get('completed', our_event['status'].get('completed', False))
-                                    our_event['status']['detail'] = sb_status['type'].get('detail', our_event['status'].get('detail', ''))
-                            break
+                # Enrich events for this date using the helper (no broadcast normalization for past events)
+                for event in past_by_date[date_str]:
+                    self._enrich_event_from_scoreboard_lookup(event, scoreboard_lookup, normalize_broadcasts=False, set_odds_flag=False)
 
         return extended_events
 
@@ -729,13 +811,7 @@ class EPGOrchestrator:
             Dictionary with all context data populated
         """
         # Determine correct API path (sport/league) for ESPN API calls
-        if team.get('api_path'):
-            api_parts = team['api_path'].split('/', 1)
-            api_sport = api_parts[0]
-            api_league = api_parts[1] if len(api_parts) > 1 else team['league']
-        else:
-            api_sport = team['sport']
-            api_league = team['league']
+        api_sport, api_league = self._get_api_path(team)
 
         if not event:
             return {
@@ -753,12 +829,7 @@ class EPGOrchestrator:
         our_team_id = str(team.get('espn_team_id', ''))
 
         # Identify opponent from event
-        home_team = event.get('home_team', {})
-        away_team = event.get('away_team', {})
-
-        is_home = str(home_team.get('id', '')) == our_team_id
-        opponent = away_team if is_home else home_team
-        opponent_id = str(opponent.get('id', ''))
+        is_home, opponent, opponent_id = self._determine_home_away(event, our_team_id)
 
         # Fetch opponent stats
         opponent_stats = {}
@@ -1523,57 +1594,21 @@ class EPGOrchestrator:
             game_date_local = game_date_utc.astimezone(ZoneInfo(epg_timezone))
             date_str = game_date_local.strftime('%Y%m%d')
 
-            # Fetch scoreboard for that date
+            # Fetch and enrich using base function
             logger.debug(f"Fetching scoreboard for last game on {date_str}")
-            scoreboard_data = self.espn.get_scoreboard(api_sport, api_league, date_str)
+            enriched = self._fetch_and_enrich_event_with_scoreboard(
+                last_game, date_str, api_sport, api_league,
+                normalize_broadcasts=True,
+                set_odds_flag=False
+            )
             api_calls_counter['count'] += 1
 
-            if not scoreboard_data or 'events' not in scoreboard_data:
-                logger.debug("No scoreboard data found for last game")
+            if enriched:
+                logger.debug(f"Enriched last game {last_game.get('id')} with scoreboard data")
+                return enriched
+            else:
+                logger.debug(f"Last game {last_game.get('id')} not found in scoreboard for {date_str}")
                 return last_game
-
-            # Parse scoreboard events
-            scoreboard_events = self.espn.parse_schedule_events(scoreboard_data, 1)
-
-            # Find this specific game in the scoreboard by ID
-            game_id = last_game.get('id')
-            for scoreboard_event in scoreboard_events:
-                if scoreboard_event.get('id') == game_id:
-                    # Found it! Merge scoreboard data
-                    logger.debug(f"Enriched last game {game_id} with scoreboard data")
-
-                    # Deep merge: scoreboard competitions have priority (they have scores)
-                    if 'competitions' in scoreboard_event:
-                        # Normalize scoreboard broadcast format to match schedule format
-                        comp = scoreboard_event['competitions'][0] if scoreboard_event['competitions'] else {}
-                        if 'broadcasts' in comp:
-                            normalized_broadcasts = []
-                            for b in comp['broadcasts']:
-                                if isinstance(b, dict) and 'market' in b and isinstance(b['market'], str):
-                                    # This is scoreboard format - normalize it
-                                    market_str = b['market']
-                                    market_type = market_str.capitalize()
-                                    network_name = b.get('names', [None])[0]
-
-                                    # Convert to schedule format
-                                    normalized = {
-                                        'type': {'id': '1', 'shortName': 'TV'},
-                                        'market': {'type': market_type},
-                                        'media': {'shortName': network_name} if network_name else {}
-                                    }
-                                    normalized_broadcasts.append(normalized)
-                                else:
-                                    # Already in schedule format, keep as-is
-                                    normalized_broadcasts.append(b)
-
-                            comp['broadcasts'] = normalized_broadcasts
-
-                        last_game['competitions'] = scoreboard_event['competitions']
-
-                    return last_game
-
-            logger.debug(f"Last game {game_id} not found in scoreboard for {date_str}")
-            return last_game
 
         except Exception as e:
             logger.warning(f"Error enriching last game with score: {e}")
