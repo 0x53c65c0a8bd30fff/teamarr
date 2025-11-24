@@ -1198,7 +1198,9 @@ def api_parse_espn_url():
             team_abbrev=team_data.get('team_abbrev', ''),
             team_slug=team_data.get('team_slug', ''),
             league=team_data.get('league', ''),
-            sport=team_data.get('sport', '')
+            league_name=team_data.get('league_name', ''),
+            sport=team_data.get('sport', ''),
+            espn_team_id=team_data.get('espn_team_id', '')
         )
 
         return jsonify({
@@ -1478,6 +1480,7 @@ def api_teams_bulk_import():
                 team_name = team_data.get('name', '')
                 team_abbrev = team_data.get('abbreviation', '')
                 team_slug = team_data.get('slug', '')
+                espn_team_id = str(team_data.get('id', ''))
 
                 # Build channel ID from format
                 channel_id = _generate_channel_id(
@@ -1486,7 +1489,9 @@ def api_teams_bulk_import():
                     team_abbrev=team_abbrev,
                     team_slug=team_slug,
                     league=league_code,
-                    sport=sport
+                    league_name='',  # Not available in bulk import, will use league.upper() as fallback
+                    sport=sport,
+                    espn_team_id=espn_team_id
                 )
 
                 # Check if team already exists
@@ -1684,7 +1689,7 @@ def _generate_channel_id(format_template, **kwargs):
 
     Args:
         format_template: String template with variables like '{team_abbrev}.{league}'
-        **kwargs: Variables to substitute (team_name, team_abbrev, team_slug, league, sport)
+        **kwargs: Variables to substitute (team_name, team_abbrev, team_slug, league, sport, espn_team_id, league_name)
 
     Returns:
         str: Generated channel ID (lowercased, sanitized)
@@ -1692,23 +1697,33 @@ def _generate_channel_id(format_template, **kwargs):
     # Start with the format template
     channel_id = format_template
 
-    # Replace all available variables
+    # Get team name and convert to PascalCase
+    team_name = kwargs.get('team_name', '')
+    team_name_pascal = ''.join(word.capitalize() for word in team_name.split())
+
+    # Get league code and league name
+    league_code = kwargs.get('league', '')
+    league_name = kwargs.get('league_name', league_code.upper() if league_code else '')
+
+    # Replace all available variables (order matters - do specific ones first)
     replacements = {
-        '{team_name}': kwargs.get('team_name', ''),
-        '{team_abbrev}': kwargs.get('team_abbrev', ''),
-        '{team_slug}': kwargs.get('team_slug', ''),
-        '{league}': kwargs.get('league', ''),
-        '{sport}': kwargs.get('sport', '')
+        '{team_name_pascal}': team_name_pascal,
+        '{league_id}': league_code.lower(),
+        '{team_abbrev}': kwargs.get('team_abbrev', '').lower(),
+        '{team_name}': team_name.lower().replace(' ', '-'),
+        '{team_slug}': kwargs.get('team_slug', team_name.lower().replace(' ', '-')),
+        '{espn_team_id}': str(kwargs.get('espn_team_id', '')),
+        '{league}': league_name,
+        '{sport}': kwargs.get('sport', '').lower()
     }
 
     for placeholder, value in replacements.items():
         channel_id = channel_id.replace(placeholder, str(value))
 
-    # Clean up the channel ID (lowercase, remove special chars, replace spaces)
+    # Clean up the channel ID (lowercase, remove special chars)
     channel_id = channel_id.lower()
-    channel_id = channel_id.replace(' ', '-')
     channel_id = channel_id.replace("'", "")
-    # Remove any other problematic characters
+    # Remove any other problematic characters except alphanumeric, dots, and dashes
     import re
     channel_id = re.sub(r'[^a-z0-9.-]', '', channel_id)
 
