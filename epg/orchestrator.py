@@ -83,7 +83,7 @@ class EPGOrchestrator:
         Generate complete EPG data for all active teams with templates
 
         Args:
-            days_ahead: Number of days to generate EPG for
+            days_ahead: Number of days to generate EPG for (1 = today only, 2 = today and tomorrow, etc.)
             epg_timezone: Timezone for EPG generation
             settings: Global settings dict (includes midnight_crossover_mode, etc.)
             progress_callback: Optional callback function(current, total, team_name, message) for progress updates
@@ -1091,7 +1091,7 @@ class EPGOrchestrator:
         Args:
             team: Team configuration with filler settings
             game_events: List of actual game events in EPG window (sorted by date)
-            days_ahead: Number of days in EPG window
+            days_ahead: Number of days in EPG window (1 = today only, 2 = today and tomorrow, etc.)
             team_stats: Team stats for template resolution
             epg_timezone: Timezone for EPG generation
             extended_events: Extended list of game events (beyond EPG window) for next/last game context
@@ -1131,12 +1131,12 @@ class EPGOrchestrator:
             start_datetime_tz = epg_start_datetime.astimezone(team_tz)
             start_date = start_datetime_tz.date()
 
-        # Calculate end_date based on today + days_ahead (regardless of start_date)
-        # This ensures filler coverage matches event filtering which uses now + days_ahead
+        # Calculate end_date based on today + (days_ahead - 1)
+        # days_ahead=1 means today only, days_ahead=2 means today and tomorrow, etc.
         # If start_date is earlier due to midnight crossover, we'll generate filler from that
-        # point forward to (today + days_ahead)
+        # point forward to the calculated end_date
         now = datetime.now(team_tz)
-        end_date = now.date() + timedelta(days=days_ahead)
+        end_date = now.date() + timedelta(days=days_ahead - 1)
 
         # Create a set of game dates for quick lookup (only EPG window games)
         game_dates = set()

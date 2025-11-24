@@ -34,7 +34,8 @@
                 <div class="form-group">
                     <label for="epg_days_ahead">Days to Generate</label>
                     <input type="number" id="epg_days_ahead" name="epg_days_ahead" class="form-control"
-                           value="{{ settings.epg_days_ahead }}" min="1" max="30">
+                           value="{{ settings.epg_days_ahead }}" min="1" max="14" required>
+                    <small class="form-help">Valid range 1-14 (1 = today only, 2 = today and tomorrow, etc.)</small>
                 </div>
 
                 <div class="form-group">

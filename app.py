@@ -814,6 +814,10 @@ def settings_update():
                 # Handle numeric fields
                 elif field in ['epg_days_ahead', 'cache_duration_hours']:
                     value = int(value)
+                    # Validate epg_days_ahead range
+                    if field == 'epg_days_ahead' and (value < 1 or value > 14):
+                        flash('Days to Generate must be between 1 and 14', 'error')
+                        return redirect(url_for('settings_form'))
                 elif field in ['game_duration_default', 'max_program_hours_default',
                                'game_duration_basketball', 'game_duration_football',
                                'game_duration_hockey', 'game_duration_baseball', 'game_duration_soccer']:

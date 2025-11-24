@@ -361,7 +361,7 @@ class ESPNClient:
 
         Args:
             schedule_data: Raw schedule data from ESPN API
-            days_ahead: Filter to events within this many days in the future
+            days_ahead: Number of days to include (1 = today only, 2 = today and tomorrow, etc.)
             days_behind: Filter to events within this many days in the past (default: 1 to include today's games that may have started)
 
         Returns:
@@ -373,7 +373,9 @@ class ESPNClient:
         events = []
         from datetime import timezone as tz
         now = datetime.now(tz.utc)
-        cutoff_future = now + timedelta(days=days_ahead)
+        # Calculate cutoff as end of the Nth day (days_ahead=1 means today only, 2 means today+tomorrow, etc.)
+        cutoff_date = now.date() + timedelta(days=days_ahead - 1)
+        cutoff_future = datetime.combine(cutoff_date, datetime.max.time()).replace(tzinfo=tz.utc)
         cutoff_past = now - timedelta(days=days_behind)
 
         for event in schedule_data.get('events', []):
