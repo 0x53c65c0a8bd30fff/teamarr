@@ -9,9 +9,11 @@ class XMLTVGenerator:
     """Generate XMLTV format EPG files"""
 
     def __init__(self, generator_name: str = "Teamarr - Dynamic EPG Generator for Sports Team Channels",
-                 generator_url: str = "http://localhost:9195"):
+                 generator_url: str = "http://localhost:9195",
+                 version: str = "1.0.0"):
         self.generator_name = generator_name
         self.generator_url = generator_url
+        self.version = version
 
     def generate(self, teams: List[Dict], events: Dict[str, List[Dict]],
                  settings: Dict) -> str:
@@ -209,7 +211,7 @@ class XMLTVGenerator:
         declaration = '<?xml version="1.0" encoding="UTF-8"?>'
         watermark = (
             '<!--\n'
-            '  Generated with Teamarr - Dynamic EPG Generator for Sports Team Channels\n'
+            f'  Generated with Teamarr v{self.version} - Dynamic EPG Generator for Sports Team Channels\n'
             '  https://github.com/egyptiangio/teamarr\n'
             '-->'
         )

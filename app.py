@@ -46,7 +46,8 @@ if not os.path.exists(os.path.join(os.path.dirname(__file__), 'teamarr.db')):
 epg_orchestrator = EPGOrchestrator()
 xmltv_generator = XMLTVGenerator(
     generator_name="Teamarr - Dynamic EPG Generator for Sports Team Channels",
-    generator_url="http://localhost:9195"
+    generator_url="http://localhost:9195",
+    version=VERSION
 )
 
 # Scheduler thread
