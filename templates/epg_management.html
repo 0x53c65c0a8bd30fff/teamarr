@@ -916,15 +916,22 @@ function highlightGap(afterStop, beforeStart, afterProgram, beforeProgram) {
     let processedLines = [];
     let inGapProgramme = false;
     let gapProgrammeLines = [];
+    let currentProgrammeType = null; // 'before' or 'after'
 
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
 
         // Check if this line starts a programme block we care about
-        if (line.includes('<programme') &&
-            (line.includes(`stop="${afterStop}"`) || line.includes(`start="${beforeStart}"`))) {
-            inGapProgramme = true;
-            gapProgrammeLines = [i];
+        if (line.includes('<programme')) {
+            if (line.includes(`stop="${afterStop}"`)) {
+                inGapProgramme = true;
+                currentProgrammeType = 'before';
+                gapProgrammeLines = [i];
+            } else if (line.includes(`start="${beforeStart}"`)) {
+                inGapProgramme = true;
+                currentProgrammeType = 'after';
+                gapProgrammeLines = [i];
+            }
         }
 
         // Track all lines in the gap programme blocks
@@ -936,15 +943,21 @@ function highlightGap(afterStop, beforeStart, afterProgram, beforeProgram) {
         if (inGapProgramme && line.includes('</programme>')) {
             inGapProgramme = false;
 
+            // Choose color based on whether this is before or after the gap
+            const bgColor = currentProgrammeType === 'before'
+                ? 'rgba(239, 68, 68, 0.25)'   // Red-ish for programme ending before gap
+                : 'rgba(59, 130, 246, 0.25)';  // Blue-ish for programme starting after gap
+
             // Highlight this entire block
             const blockLines = gapProgrammeLines.map(lineIdx => {
                 const text = lines[lineIdx];
-                return `<mark style="background: rgba(251, 191, 36, 0.3); display: block; margin: 0; padding: 0;">${escapeHtml(text)}</mark>`;
+                return `<mark style="background: ${bgColor}; display: block; margin: 0; padding: 0;">${escapeHtml(text)}</mark>`;
             });
 
             // Add the highlighted block
             processedLines.push(...blockLines);
             gapProgrammeLines = [];
+            currentProgrammeType = null;
             continue;
         }
 
