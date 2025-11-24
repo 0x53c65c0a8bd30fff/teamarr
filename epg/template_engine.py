@@ -841,9 +841,13 @@ class TemplateEngine:
             'MLS Season Pass'
         ]
 
-        # Filter out radio broadcasts and subscription packages
-        usable = [b for b in broadcasts
-                  if b.get('type', {}).get('shortName', '').upper() != 'RADIO' and
+        # Normalize all broadcasts to standard format
+        normalized = [self._normalize_broadcast(b) for b in broadcasts]
+
+        # Filter out radio broadcasts, subscription packages, and empty dicts
+        usable = [b for b in normalized
+                  if b and  # Skip empty dicts
+                     b.get('type', {}).get('shortName', '').upper() != 'RADIO' and
                      b.get('media', {}).get('shortName', '') not in SKIP_PACKAGES]
 
         if not usable:
@@ -1025,8 +1029,11 @@ class TemplateEngine:
         if not broadcasts:
             return "false"
 
-        # Check if any broadcast has market type = "National"
-        has_national = any(b.get('market', {}).get('type') == 'National' for b in broadcasts)
+        # Normalize and check if any broadcast has market type = "National"
+        has_national = any(
+            self._normalize_broadcast(b).get('market', {}).get('type') == 'National'
+            for b in broadcasts
+        )
 
         return "true" if has_national else "false"
 
