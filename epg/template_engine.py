@@ -107,6 +107,7 @@ class TemplateEngine:
         variables['opponent'] = opponent.get('name', '')
         variables['opponent_abbrev'] = opponent.get('abbrev', '')
         variables['matchup_abbrev'] = f"{away_team.get('abbrev', '')} @ {home_team.get('abbrev', '')}"
+        variables['matchup'] = f"{away_team.get('name', '')} @ {home_team.get('name', '')}"
 
         # Rankings (primarily for college sports - NFL/NBA don't have rankings)
         # Rank comes from team_stats/opponent_stats (fetched from team info API)

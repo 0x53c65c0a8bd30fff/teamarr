@@ -1,12 +1,12 @@
 {
   "version": "3.0.2",
   "generated": "2025-11-23",
-  "total_variables": 257,
-  "base_variables": 120,
+  "total_variables": 260,
+  "base_variables": 121,
   "suffix_system": {
     "enabled": true,
     "description": "Optimized suffix system after comprehensive audit - only necessary suffixes are generated",
-    "total_with_suffixes": 257,
+    "total_with_suffixes": 260,
     "audit_summary": {
       "last_only": {
         "count": 11,
@@ -45,9 +45,9 @@
         ]
       },
       "all_three": {
-        "count": 65,
+        "count": 66,
         "description": "Game-specific variables that vary across contexts",
-        "total_instances": 195,
+        "total_instances": 198,
         "examples": [
           "opponent",
           "game_date",
@@ -66,7 +66,7 @@
           "game_events": "Populated with current game data",
           "filler_programs": "Empty (no current game)"
         },
-        "count": 109
+        "count": 110
       },
       ".next": {
         "syntax": "{variable.next}",
@@ -78,7 +78,7 @@
           "postgame_filler": "Next scheduled game",
           "idle_filler": "Next scheduled game"
         },
-        "count": 72
+        "count": 73
       },
       ".last": {
         "syntax": "{variable.last}",
@@ -90,7 +90,7 @@
           "postgame_filler": "Just completed game (same as current)",
           "idle_filler": "Most recent completed game"
         },
-        "count": 76
+        "count": 77
       }
     },
     "examples": {
@@ -1036,8 +1036,24 @@
       ]
     },
     {
+      "name": "matchup",
+      "description": "Team matchup with full names",
+      "source": "Calculated",
+      "example": "Detroit Pistons @ Orlando Magic",
+      "category": "🏈 Teams",
+      "icon": "🎮",
+      "type": "string",
+      "availability": "always",
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball"
+      ]
+    },
+    {
       "name": "matchup_abbrev",
-      "description": "Team matchup",
+      "description": "Team matchup with abbreviations",
       "source": "Calculated",
       "example": "DET @ ORL",
       "category": "🏈 Teams",
