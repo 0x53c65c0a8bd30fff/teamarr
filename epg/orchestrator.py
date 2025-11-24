@@ -937,7 +937,10 @@ class EPGOrchestrator:
         else:
             start_date = epg_start_date
 
-        end_date = start_date + timedelta(days=days_ahead)
+        # Add 1 to days_ahead because start_date is set to yesterday (line 121) to catch
+        # midnight crossovers, but we want filler coverage to match event filtering which
+        # uses now + days_ahead. This ensures filler extends to the same cutoff as events.
+        end_date = start_date + timedelta(days=days_ahead + 1)
 
         # Create a set of game dates for quick lookup (only EPG window games)
         game_dates = set()
