@@ -1229,39 +1229,22 @@ def api_variables():
         with open(variables_path, 'r', encoding='utf-8') as f:
             variables_data = json.load(f)
 
-        # Build suffix mapping from audit_summary
-        audit_summary = variables_data.get('suffix_system', {}).get('audit_summary', {})
-
-        # Get example lists (full lists would be better, but we'll use what's available)
-        last_only_vars = set(audit_summary.get('last_only', {}).get('examples', []))
-        base_next_only_vars = set(audit_summary.get('base_next_only', {}).get('examples', []))
-        base_only_vars = set(audit_summary.get('base_only', {}).get('examples', []))
-        all_three_vars = set(audit_summary.get('all_three', {}).get('examples', []))
-
-        # Build complete sets by checking variable notes
+        # Ensure all variables have available_suffixes field (should be in JSON)
+        # If missing, provide fallback based on availability field
         for var in variables_data.get('variables', []):
-            var_name = var['name']
-            notes = var.get('notes', '')
+            if 'available_suffixes' not in var:
+                # Fallback logic if field is missing
+                availability = var.get('availability', 'always')
+                category = var.get('category', '')
 
-            # Determine available suffixes
-            available_suffixes = []
-
-            if 'BASE_ONLY' in notes or var_name in base_only_vars:
-                available_suffixes = ['base']
-            elif 'LAST_ONLY' in notes or var_name in last_only_vars:
-                available_suffixes = ['last']
-            elif 'BASE_NEXT_ONLY' in notes or var_name in base_next_only_vars:
-                available_suffixes = ['base', 'next']
-            elif var_name in all_three_vars:
-                available_suffixes = ['base', 'next', 'last']
-            else:
-                # Default: check if it's a game-specific variable (most are all_three)
-                if var.get('category') in ['🏈 Teams', '📊 Stats']:
-                    available_suffixes = ['base']  # Team stats are usually base only
+                if availability in ('final_only', 'last_game_only'):
+                    var['available_suffixes'] = ['last']
+                elif availability == 'same_day_only':
+                    var['available_suffixes'] = ['base', 'next']
+                elif category in ('🏈 Teams', '📊 Team Stats'):
+                    var['available_suffixes'] = ['base']
                 else:
-                    available_suffixes = ['base', 'next', 'last']  # Game-specific vars
-
-            var['available_suffixes'] = available_suffixes
+                    var['available_suffixes'] = ['base', 'next', 'last']
 
         return jsonify(variables_data)
     except Exception as e:

@@ -93,6 +93,21 @@ def _parse_template_json_fields(template: Dict[str, Any]) -> Dict[str, Any]:
 
     return template
 
+def _serialize_template_json_fields(template: Dict[str, Any]) -> Dict[str, Any]:
+    """Serialize JSON fields in a template dict to strings for database storage"""
+    import json
+
+    # Fields that should be serialized to JSON
+    json_fields = ['categories', 'flags', 'description_options']
+
+    for field in json_fields:
+        if field in template and template[field] is not None:
+            if not isinstance(template[field], str):
+                # Serialize Python object to JSON string
+                template[field] = json.dumps(template[field])
+
+    return template
+
 def get_template(template_id: int) -> Optional[Dict[str, Any]]:
     """Get template by ID"""
     conn = get_connection()
@@ -130,6 +145,9 @@ def create_template(data: Dict[str, Any]) -> int:
     try:
         cursor = conn.cursor()
 
+        # Serialize JSON fields to strings for database storage
+        data = _serialize_template_json_fields(data.copy())
+
         # Extract fields (all are optional except name)
         fields = [
             'name', 'sport', 'league',
@@ -163,6 +181,9 @@ def update_template(template_id: int, data: Dict[str, Any]) -> bool:
     conn = get_connection()
     try:
         cursor = conn.cursor()
+
+        # Serialize JSON fields to strings for database storage
+        data = _serialize_template_json_fields(data.copy())
 
         # Build UPDATE statement from provided fields
         fields = [k for k in data.keys() if k != 'id']
