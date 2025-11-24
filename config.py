@@ -6,7 +6,7 @@ import os
 
 # Application version - single source of truth
 # Format: MAJOR.MINOR.PATCH[-pre-release][+build]
-BASE_VERSION = "1.0.3"
+BASE_VERSION = "1.0.4"
 
 def get_version():
     """
