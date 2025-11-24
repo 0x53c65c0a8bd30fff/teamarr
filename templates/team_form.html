@@ -64,7 +64,8 @@
                         <input type="checkbox" id="use_default_channel_id" {% if not team %}checked{% endif %} onchange="toggleChannelIdMode()">
                         <span>Use Global Default Format</span>
                     </label>
-                    <small class="form-help">Format: <code>{{ settings.default_channel_id_format or '{team_abbrev}.{league}' }}</code></small>
+                    <small class="form-help">Format: <code>{{ settings.default_channel_id_format or '{team_name_pascal}.{league_id}' }}</code><br>
+                    Available variables: <code>{team_name_pascal}</code>, <code>{team_abbrev}</code>, <code>{team_name}</code>, <code>{team_slug}</code>, <code>{espn_team_id}</code>, <code>{league_id}</code>, <code>{league}</code>, <code>{sport}</code></small>
                 </div>
                 <div id="channel_id_preview" style="display: none; margin-bottom: 0.75rem;">
                     <div style="background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem;">
@@ -226,7 +227,7 @@ function toggleChannelIdMode() {
 }
 
 function updateChannelIdPreview() {
-    const format = '{{ settings.default_channel_id_format or "{team_abbrev}.{league}" }}';
+    const format = '{{ settings.default_channel_id_format or "{team_name_pascal}.{league_id}" }}';
     const channelId = generateChannelId(format);
     document.getElementById('channel_id_preview_text').textContent = channelId || '(Parse ESPN URL to see preview)';
 
@@ -259,17 +260,27 @@ function generateChannelId(format) {
         return '';
     }
 
+    // Convert team_name to PascalCase (e.g., "Detroit Pistons" -> "DetroitPistons")
+    const teamNamePascal = teamName
+        .split(/\s+/)
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join('');
+
     // Replace variables in format
     let channelId = format
+        .replace('{team_name_pascal}', teamNamePascal)
+        .replace('{league_id}', league.toLowerCase())
         .replace('{team_abbrev}', teamAbbrev.toLowerCase())
         .replace('{team_name}', teamName.toLowerCase().replace(/[^a-z0-9]+/g, '-'))
         .replace('{team_slug}', teamSlug || teamName.toLowerCase().replace(/[^a-z0-9]+/g, '-'))
         .replace('{espn_team_id}', espnTeamId)
-        .replace('{league}', league.toLowerCase())
+        .replace('{league}', league.toUpperCase())
         .replace('{sport}', sport.toLowerCase());
 
-    // Clean up any remaining special characters
-    channelId = channelId.replace(/[^a-z0-9.-]+/g, '-').replace(/^-|-$/g, '');
+    // Clean up any remaining special characters (only for old-style formats with dashes)
+    if (format.includes('-') || format.includes('{team_name}') || format.includes('{team_slug}')) {
+        channelId = channelId.replace(/[^a-z0-9.-]+/g, '-').replace(/^-|-$/g, '');
+    }
 
     return channelId;
 }
