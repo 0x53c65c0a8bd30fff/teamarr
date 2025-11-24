@@ -64,7 +64,7 @@
                         <input type="checkbox" id="use_default_channel_id" {% if not team %}checked{% endif %} onchange="toggleChannelIdMode()">
                         <span>Use Global Default Format</span>
                     </label>
-                    <small class="form-help">Format: <code>{{ settings.default_channel_id_format or '{team_name_pascal}.{league_id}' }}</code><br>
+                    <small class="form-help">Format: <code>{{ settings.default_channel_id_format or '{team_abbrev}.{league_id}' }}</code><br>
                     Available variables: <code>{team_name_pascal}</code>, <code>{team_abbrev}</code>, <code>{team_name}</code>, <code>{team_slug}</code>, <code>{espn_team_id}</code>, <code>{league_id}</code>, <code>{league}</code>, <code>{sport}</code></small>
                 </div>
                 <div id="channel_id_preview" style="display: none; margin-bottom: 0.75rem;">
@@ -227,7 +227,7 @@ function toggleChannelIdMode() {
 }
 
 function updateChannelIdPreview() {
-    const format = '{{ settings.default_channel_id_format or "{team_name_pascal}.{league_id}" }}';
+    const format = '{{ settings.default_channel_id_format or "{team_abbrev}.{league_id}" }}';
     const channelId = generateChannelId(format);
     document.getElementById('channel_id_preview_text').textContent = channelId || '(Parse ESPN URL to see preview)';
 
