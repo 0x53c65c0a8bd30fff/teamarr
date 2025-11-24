@@ -214,8 +214,14 @@ def index():
     def format_timestamp(utc_timestamp):
         if not utc_timestamp:
             return None
-        # Parse UTC timestamp
-        dt_utc = datetime.fromisoformat(utc_timestamp.replace('Z', '+00:00'))
+        # SQLite timestamps are stored as 'YYYY-MM-DD HH:MM:SS' without timezone info
+        # We need to parse them as naive datetime and then treat as UTC
+        dt_naive = datetime.fromisoformat(utc_timestamp.replace('Z', '+00:00'))
+        # If the datetime is naive (no timezone info), assume it's UTC
+        if dt_naive.tzinfo is None:
+            dt_utc = dt_naive.replace(tzinfo=ZoneInfo('UTC'))
+        else:
+            dt_utc = dt_naive
         # Convert to user's timezone
         dt_local = dt_utc.astimezone(ZoneInfo(user_timezone))
         # Format with timezone abbreviation
