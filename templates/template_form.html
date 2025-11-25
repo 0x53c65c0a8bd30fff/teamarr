@@ -1177,14 +1177,6 @@ function generateTemplateVariablesHTML(containerId) {
         <div class="variable-helper">
             <h4 style="margin: 0 0 0.75rem 0; color: var(--text-secondary); font-size: 1rem;">📝 Template Variables</h4>
 
-            <!-- Sport Selector for Preview -->
-            <div class="sport-preview-selector" style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; padding: 0.5rem; background: var(--bg-tertiary); border-radius: 4px; border: 1px solid var(--border);">
-                <label for="preview-sport-select" style="font-size: 0.75rem; color: var(--text-muted); white-space: nowrap;">Preview as:</label>
-                <select id="preview-sport-select" onchange="updatePreviewSport(this.value)" style="flex: 1; padding: 0.25rem 0.5rem; font-size: 0.8rem; border: 1px solid var(--border); border-radius: 3px; background: var(--bg-secondary); color: var(--text-primary); cursor: pointer;">
-                    ${sportOptions}
-                </select>
-            </div>
-
             <!-- Suffix System Guide -->
             <div class="suffix-guide">
                 <ul class="suffix-guide-list">
@@ -1203,11 +1195,11 @@ function generateTemplateVariablesHTML(containerId) {
             <!-- Search -->
             <input type="text" class="variable-search-input" placeholder="Search variables..." style="width: 100%; margin-bottom: 0.75rem; padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary); font-size: 0.85rem;">
 
-            <!-- Recently Used -->
-            <div class="variable-category recently-used-category" style="display: none; margin-bottom: 0.75rem;">
-                <h4 style="margin: 0 0 0.5rem 0; font-size: 0.85rem; font-weight: 600;">🕒 Recently Used</h4>
-                <div class="recently-used-vars" style="display: flex; flex-wrap: wrap; gap: 0.4rem;"></div>
-            </div>
+            <!-- Recently Used (collapsible) -->
+            <details class="variable-category recently-used-category" style="display: none; margin-bottom: 0.5rem;">
+                <summary style="cursor: pointer; font-weight: 600; color: var(--text-primary); font-size: 0.85rem; padding: 0.25rem 0;">🕒 Recently Used</summary>
+                <div class="recently-used-vars" style="display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.5rem;"></div>
+            </details>
     `;
 
     const categoryCount = Object.keys(TEMPLATE_VARIABLES).length;
@@ -1260,6 +1252,16 @@ function generateTemplateVariablesHTML(containerId) {
             </details>
         `;
     }
+
+    // Sport Selector for Preview - at the very bottom
+    html += `
+            <div class="sport-preview-selector" style="display: flex; align-items: center; gap: 0.5rem; margin-top: 1rem; padding: 0.5rem; background: var(--bg-tertiary); border-radius: 4px; border: 1px solid var(--border);">
+                <label for="preview-sport-select" style="font-size: 0.75rem; color: var(--text-muted); white-space: nowrap;">Preview as:</label>
+                <select id="preview-sport-select" onchange="updatePreviewSport(this.value)" style="flex: 1; padding: 0.25rem 0.5rem; font-size: 0.8rem; border: 1px solid var(--border); border-radius: 3px; background: var(--bg-secondary); color: var(--text-primary); cursor: pointer;">
+                    ${sportOptions}
+                </select>
+            </div>
+    `;
 
     html += `</div>`;
     return html;
