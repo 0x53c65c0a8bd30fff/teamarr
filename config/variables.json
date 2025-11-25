@@ -1,12 +1,12 @@
 {
   "version": "3.3.0",
   "generated": "2025-11-24",
-  "total_variables": 125,
-  "base_variables": 135,
+  "total_variables": 126,
+  "base_variables": 136,
   "suffix_system": {
     "enabled": true,
     "description": "Optimized suffix system after comprehensive audit - only necessary suffixes are generated",
-    "total_with_suffixes": 275,
+    "total_with_suffixes": 276,
     "audit_summary": {
       "last_only": {
         "count": 11,
@@ -33,9 +33,9 @@
         ]
       },
       "base_only": {
-        "count": 38,
+        "count": 39,
         "description": "Team identity and season stats that don't vary by game context",
-        "total_instances": 38,
+        "total_instances": 39,
         "examples": [
           "team_name",
           "team_record",
@@ -66,7 +66,7 @@
           "game_events": "Populated with current game data",
           "filler_programs": "Empty (no current game)"
         },
-        "count": 111
+        "count": 112
       },
       ".next": {
         "syntax": "{variable.next}",
@@ -1556,6 +1556,34 @@
         "NCAAM": "Tue",
         "NCAAF": "Sat",
         "Soccer": "Sun"
+      }
+    },
+    {
+      "name": "today_tonight",
+      "description": "Returns 'today' or 'tonight' based on game time (5pm cutoff)",
+      "source": "`/schedule` → event.date",
+      "category": "📅 Schedule & Broadcast",
+      "icon": "🎮",
+      "type": "string",
+      "availability": "always",
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball",
+        "soccer"
+      ],
+      "available_suffixes": [
+        "base"
+      ],
+      "examples_by_sport": {
+        "NBA": "tonight",
+        "NFL": "today",
+        "MLB": "tonight",
+        "NHL": "tonight",
+        "NCAAM": "tonight",
+        "NCAAF": "today",
+        "Soccer": "today"
       }
     },
     {
@@ -3922,8 +3950,8 @@
       }
     }
   ],
-  "base_variables_count": 112,
-  "total_variables_count": 233,
+  "base_variables_count": 113,
+  "total_variables_count": 234,
   "examples_by_sport_info": {
     "description": "Each variable has sport-specific example values representing realistic scenarios",
     "sports": [
