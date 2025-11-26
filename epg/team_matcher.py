@@ -1,0 +1,843 @@
+"""
+Team Matcher for Event Channel EPG
+
+Extracts team names from stream/channel names and matches them to ESPN teams.
+Uses dynamic team data fetched from ESPN rather than hardcoded lists.
+
+Key Features:
+- Dynamic team database from ESPN (handles relegation/promotion)
+- User-defined aliases for edge cases (e.g., "Spurs" → "Tottenham Hotspur")
+- Normalizes messy stream names to extract team matchups
+- Separator detection (vs, at, @, v)
+- Date extraction for disambiguating multiple matchups
+"""
+
+import re
+import logging
+from datetime import datetime, timedelta
+from typing import Optional, Dict, List, Any, Tuple
+
+logger = logging.getLogger(__name__)
+
+
+def extract_date_from_text(text: str) -> Optional[datetime]:
+    """
+    Extract a date from stream name text.
+
+    Handles common formats:
+    - ISO: 2025-11-30, 2025-11-30T18:00
+    - US: 11/30, 11/30/2025, 11/30/25
+    - Text: Nov 30, November 30
+    - With parens: (2025-11-30)
+
+    Args:
+        text: Raw text that may contain a date
+
+    Returns:
+        datetime object (date only, no time) or None
+    """
+    import re
+    from datetime import datetime
+
+    # Current year for relative dates
+    current_year = datetime.now().year
+
+    # Pattern 1: ISO format (2025-11-30) or with time (2025-11-30T18:00:05)
+    iso_match = re.search(r'(\d{4})-(\d{2})-(\d{2})', text)
+    if iso_match:
+        try:
+            return datetime(
+                int(iso_match.group(1)),
+                int(iso_match.group(2)),
+                int(iso_match.group(3))
+            )
+        except ValueError:
+            pass
+
+    # Pattern 2: US format with year (11/30/2025 or 11/30/25)
+    us_full_match = re.search(r'(\d{1,2})/(\d{1,2})/(\d{2,4})', text)
+    if us_full_match:
+        try:
+            year = int(us_full_match.group(3))
+            if year < 100:
+                year += 2000
+            return datetime(
+                year,
+                int(us_full_match.group(1)),
+                int(us_full_match.group(2))
+            )
+        except ValueError:
+            pass
+
+    # Pattern 3: US format without year (11/30)
+    us_short_match = re.search(r'(\d{1,2})/(\d{1,2})(?!\d)', text)
+    if us_short_match:
+        try:
+            month = int(us_short_match.group(1))
+            day = int(us_short_match.group(2))
+            # Assume current or next year
+            date = datetime(current_year, month, day)
+            # If date is more than 6 months in the past, assume next year
+            if (datetime.now() - date).days > 180:
+                date = datetime(current_year + 1, month, day)
+            return date
+        except ValueError:
+            pass
+
+    # Pattern 4: Text month format (Nov 30, November 30)
+    month_names = {
+        'jan': 1, 'january': 1,
+        'feb': 2, 'february': 2,
+        'mar': 3, 'march': 3,
+        'apr': 4, 'april': 4,
+        'may': 5,
+        'jun': 6, 'june': 6,
+        'jul': 7, 'july': 7,
+        'aug': 8, 'august': 8,
+        'sep': 9, 'september': 9,
+        'oct': 10, 'october': 10,
+        'nov': 11, 'november': 11,
+        'dec': 12, 'december': 12
+    }
+
+    text_month_match = re.search(
+        r'(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|'
+        r'jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)'
+        r'\s+(\d{1,2})',
+        text.lower()
+    )
+    if text_month_match:
+        try:
+            month = month_names.get(text_month_match.group(1).lower())
+            day = int(text_month_match.group(2))
+            if month:
+                date = datetime(current_year, month, day)
+                if (datetime.now() - date).days > 180:
+                    date = datetime(current_year + 1, month, day)
+                return date
+        except ValueError:
+            pass
+
+    return None
+
+
+def extract_time_from_text(text: str) -> Optional[datetime]:
+    """
+    Extract a time from stream name text.
+
+    Handles common formats:
+    - 12-hour: 8:15PM, 8:15 PM, 1:00 PM ET
+    - 24-hour: 18:00, 20:15
+    - With timezone: 8:15PM ET, 1:00 PM EST
+
+    Args:
+        text: Raw text that may contain a time
+
+    Returns:
+        datetime object with time (date is today) or None
+    """
+    from datetime import datetime
+
+    # Pattern 1: 12-hour format (8:15PM, 8:15 PM, 1:00PM)
+    time_12h_match = re.search(
+        r'(\d{1,2}):(\d{2})\s*(am|pm)',
+        text.lower()
+    )
+    if time_12h_match:
+        try:
+            hour = int(time_12h_match.group(1))
+            minute = int(time_12h_match.group(2))
+            is_pm = time_12h_match.group(3) == 'pm'
+
+            if is_pm and hour != 12:
+                hour += 12
+            elif not is_pm and hour == 12:
+                hour = 0
+
+            return datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0)
+        except ValueError:
+            pass
+
+    # Pattern 2: 24-hour format (18:00, 20:15)
+    time_24h_match = re.search(r'(\d{2}):(\d{2})(?::\d{2})?(?!\d)', text)
+    if time_24h_match:
+        try:
+            hour = int(time_24h_match.group(1))
+            minute = int(time_24h_match.group(2))
+            if 0 <= hour < 24 and 0 <= minute < 60:
+                return datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0)
+        except ValueError:
+            pass
+
+    return None
+
+
+class TeamMatcher:
+    """
+    Match team names from stream/channel names to ESPN team IDs.
+
+    Uses ESPN API to fetch teams dynamically, with caching to reduce API calls.
+    Also supports user-defined aliases stored in the database.
+
+    Usage:
+        from api.espn_client import ESPNClient
+        from epg.team_matcher import TeamMatcher
+
+        espn = ESPNClient()
+        matcher = TeamMatcher(espn)
+
+        result = matcher.extract_teams("NFL | 16 -8:15PM Giants at Patriots", "nfl")
+        # Returns: {
+        #     'matched': True,
+        #     'away_team_id': '19',
+        #     'away_team_name': 'New York Giants',
+        #     'home_team_id': '17',
+        #     'home_team_name': 'New England Patriots',
+        #     'confidence': 1.0
+        # }
+    """
+
+    # Team vs team separators (order matters - check longer ones first)
+    SEPARATORS = [' vs. ', ' vs ', ' at ', ' @ ', ' v. ', ' v ']
+
+    # Cache duration for team lists (1 hour)
+    CACHE_DURATION = timedelta(hours=1)
+
+    def __init__(self, espn_client, db_connection_func=None):
+        """
+        Initialize TeamMatcher.
+
+        Args:
+            espn_client: ESPNClient instance for fetching team data
+            db_connection_func: Function that returns a database connection
+                               (for alias lookups). If None, aliases won't be used.
+        """
+        self.espn = espn_client
+        self.db_connection_func = db_connection_func
+
+        # Cache: {league_code: {'teams': [...], 'fetched_at': datetime}}
+        self._team_cache: Dict[str, Dict] = {}
+
+        # League config cache (from database)
+        self._league_config: Dict[str, Dict] = {}
+
+    def _get_league_config(self, league_code: str) -> Optional[Dict]:
+        """
+        Get league configuration (sport, api_path) from database.
+
+        Args:
+            league_code: League code (e.g., 'nfl', 'epl')
+
+        Returns:
+            Dict with league config or None if not found
+        """
+        if league_code in self._league_config:
+            return self._league_config[league_code]
+
+        if not self.db_connection_func:
+            # Fallback to common mappings if no DB
+            fallback = {
+                'nfl': {'sport': 'football', 'api_path': 'football/nfl'},
+                'nba': {'sport': 'basketball', 'api_path': 'basketball/nba'},
+                'nhl': {'sport': 'hockey', 'api_path': 'hockey/nhl'},
+                'mlb': {'sport': 'baseball', 'api_path': 'baseball/mlb'},
+                'mls': {'sport': 'soccer', 'api_path': 'soccer/usa.1'},
+                'epl': {'sport': 'soccer', 'api_path': 'soccer/eng.1'},
+                'laliga': {'sport': 'soccer', 'api_path': 'soccer/esp.1'},
+                'bundesliga': {'sport': 'soccer', 'api_path': 'soccer/ger.1'},
+                'seriea': {'sport': 'soccer', 'api_path': 'soccer/ita.1'},
+                'ligue1': {'sport': 'soccer', 'api_path': 'soccer/fra.1'},
+            }
+            return fallback.get(league_code.lower())
+
+        try:
+            conn = self.db_connection_func()
+            cursor = conn.cursor()
+            result = cursor.execute(
+                "SELECT sport, api_path FROM league_config WHERE league_code = ?",
+                (league_code.lower(),)
+            ).fetchone()
+            conn.close()
+
+            if result:
+                config = {'sport': result[0], 'api_path': result[1]}
+                self._league_config[league_code] = config
+                return config
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching league config for {league_code}: {e}")
+            return None
+
+    # College leagues that need conference-based team fetching
+    COLLEGE_LEAGUES = {'ncaam', 'ncaaw', 'ncaaf', 'mens-college-basketball', 'womens-college-basketball', 'college-football'}
+
+    def _get_teams_for_league(self, league_code: str) -> List[Dict]:
+        """
+        Get all teams for a league, using cache when available.
+
+        Fetches from ESPN API and caches for CACHE_DURATION.
+        College leagues use conference-based fetching to get all teams.
+
+        Args:
+            league_code: League code (e.g., 'nfl', 'epl', 'ncaam')
+
+        Returns:
+            List of team dicts with id, name, abbreviation, shortName, slug
+        """
+        league_lower = league_code.lower()
+
+        # Check cache
+        if league_lower in self._team_cache:
+            cached = self._team_cache[league_lower]
+            if datetime.now() - cached['fetched_at'] < self.CACHE_DURATION:
+                return cached['teams']
+
+        # Get league config
+        config = self._get_league_config(league_lower)
+        if not config:
+            logger.warning(f"No league config found for {league_code}")
+            return []
+
+        # Parse sport and league from api_path (e.g., "basketball/nba" -> "basketball", "nba")
+        api_path = config['api_path']
+        parts = api_path.split('/')
+        if len(parts) != 2:
+            logger.error(f"Invalid api_path format: {api_path}")
+            return []
+
+        sport, league = parts
+
+        # College leagues need conference-based fetching
+        if league_lower in self.COLLEGE_LEAGUES or 'college' in league.lower():
+            teams = self._fetch_college_teams(sport, league)
+        else:
+            # Pro leagues - simple team list
+            logger.info(f"Fetching teams for {league_code} from ESPN API")
+            teams = self.espn.get_league_teams(sport, league)
+
+        if not teams:
+            logger.warning(f"No teams returned for {league_code}")
+            return []
+
+        # Build search index with normalized names
+        for team in teams:
+            team['_search_names'] = self._build_search_names(team)
+
+        # Cache results
+        self._team_cache[league_lower] = {
+            'teams': teams,
+            'fetched_at': datetime.now()
+        }
+
+        logger.info(f"Cached {len(teams)} teams for {league_code}")
+        return teams
+
+    def _fetch_college_teams(self, sport: str, league: str) -> List[Dict]:
+        """
+        Fetch all teams for a college league by iterating through conferences.
+
+        College sports have 300+ teams organized by conference, so we need
+        to fetch each conference's teams separately.
+
+        Args:
+            sport: Sport (e.g., 'basketball', 'football')
+            league: League identifier (e.g., 'mens-college-basketball')
+
+        Returns:
+            List of all team dicts
+        """
+        logger.info(f"Fetching college teams for {league} via conferences")
+
+        # Get all conferences
+        conferences = self.espn.get_league_conferences(sport, league)
+        if not conferences:
+            logger.warning(f"No conferences found for {league}")
+            return []
+
+        all_teams = []
+        seen_ids = set()
+
+        for conf in conferences:
+            conf_id = conf.get('id')
+            conf_name = conf.get('name', 'Unknown')
+
+            if not conf_id:
+                continue
+
+            logger.debug(f"Fetching teams for conference: {conf_name}")
+            conf_teams = self.espn.get_conference_teams(sport, league, conf_id)
+
+            if conf_teams:
+                for team in conf_teams:
+                    team_id = team.get('id')
+                    if team_id and team_id not in seen_ids:
+                        seen_ids.add(team_id)
+                        all_teams.append(team)
+
+        logger.info(f"Fetched {len(all_teams)} college teams from {len(conferences)} conferences")
+        return all_teams
+
+    def _build_search_names(self, team: Dict) -> List[str]:
+        """
+        Build list of normalized search names for a team.
+
+        Includes variations like:
+        - Full name: "New York Giants"
+        - Short name: "Giants"
+        - Abbreviation: "NYG"
+        - Slug: "new-york-giants"
+        - City/region: "New York"
+        - Nickname only: "giants"
+
+        Args:
+            team: Team dict from ESPN API
+
+        Returns:
+            List of lowercase normalized search strings
+        """
+        names = set()
+
+        # Full display name
+        if team.get('name'):
+            names.add(self._normalize_text(team['name']))
+
+        # Short name (usually just nickname)
+        if team.get('shortName'):
+            names.add(self._normalize_text(team['shortName']))
+
+        # Abbreviation
+        if team.get('abbreviation'):
+            names.add(team['abbreviation'].lower())
+
+        # Slug
+        if team.get('slug'):
+            names.add(team['slug'].lower().replace('-', ' '))
+
+        # Extract city and nickname from full name
+        if team.get('name'):
+            # Try to split "City/Region Team" -> add both parts
+            full_name = team['name']
+
+            # Common patterns: "New York Giants", "Los Angeles Lakers", etc.
+            # The nickname is usually the last word(s)
+            words = full_name.split()
+            if len(words) >= 2:
+                # Add just the nickname (last word usually)
+                # But handle multi-word nicknames like "Red Sox", "Blue Jays"
+                short = team.get('shortName', '')
+                if short:
+                    names.add(self._normalize_text(short))
+                else:
+                    # Guess nickname is last 1-2 words
+                    names.add(self._normalize_text(words[-1]))
+
+                # Add city/region (first part)
+                # Handle "New York", "Los Angeles", "San Francisco", etc.
+                if len(words) > 2:
+                    potential_city = ' '.join(words[:-1])
+                    names.add(self._normalize_text(potential_city))
+
+        return list(names)
+
+    def _normalize_text(self, text: str) -> str:
+        """
+        Normalize text for matching.
+
+        - Lowercase
+        - Remove special characters
+        - Normalize whitespace
+        - Remove common prefixes/suffixes
+
+        Args:
+            text: Raw text string
+
+        Returns:
+            Normalized lowercase string
+        """
+        if not text:
+            return ''
+
+        text = text.lower()
+
+        # Remove parenthetical content
+        text = re.sub(r'\([^)]*\)', '', text)
+
+        # Remove common channel prefixes (ncaa covers ncaaf, ncaam, ncaaw, ncaab)
+        # Include optional colon after prefix (e.g., "NCAAM: Duke vs UNC")
+        text = re.sub(r'^(nfl|nba|nhl|mlb|ncaa[mfwb]?|mls|epl|premier\s*league|soccer)\s*:?\s*', '', text, flags=re.I)
+
+        # Remove "game pass", "on" prefixes
+        text = re.sub(r'game\s*pass\s*\d*:?\s*', '', text, flags=re.I)
+        text = re.sub(r'^on\s+', '', text, flags=re.I)
+
+        # Remove times (e.g., "8:15PM", "01:00 PM ET")
+        text = re.sub(r'\d{1,2}:\d{2}\s*(am|pm|et|est|pt|pst|ct|cst|mt|mst)?\s*', '', text, flags=re.I)
+
+        # Remove dates (e.g., "11/23", "2025-11-26", "Nov 26")
+        text = re.sub(r'\d{1,2}/\d{1,2}(/\d{2,4})?\s*', '', text)
+        text = re.sub(r'\d{4}-\d{2}-\d{2}\s*', '', text)
+        text = re.sub(r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s*\d{1,2}\s*', '', text, flags=re.I)
+
+        # Remove channel numbers (e.g., "| 16 -", "05:")
+        text = re.sub(r'\|\s*\d+\s*[-:]?\s*', '', text)
+        text = re.sub(r'^\d+\s*[-:]?\s*', '', text)
+
+        # Remove rankings (e.g., "#8 Alabama", "8 Alabama")
+        text = re.sub(r'#?\d+\s+(?=[a-z])', '', text)
+
+        # Remove special characters but keep spaces
+        text = re.sub(r'[|:\-#\[\]]+', ' ', text)
+
+        # Remove "FC", "SC", "CF" suffixes for soccer (keep as optional)
+        # Don't remove - these are part of team names
+
+        # Normalize whitespace
+        text = ' '.join(text.split())
+
+        return text.strip()
+
+    def _normalize_for_stream(self, stream_name: str) -> str:
+        """
+        Normalize a stream name, removing everything except team names.
+
+        More aggressive than _normalize_text - removes more noise
+        that's common in IPTV stream names.
+
+        Args:
+            stream_name: Raw stream/channel name
+
+        Returns:
+            Cleaned string with just team matchup info
+        """
+        text = stream_name
+
+        # Remove country/region prefixes like "(UK)", "(US)", "CA"
+        text = re.sub(r'^\(?\s*(uk|us|usa|ca|au)\s*\)?[\s|:]*', '', text, flags=re.I)
+
+        # Remove provider prefixes like "(Sky+ 11)", "(Dazn 070)", "(Peacock 023)"
+        text = re.sub(r'\([^)]*(?:sky|dazn|peacock|tsn|sportsnet|espn|fox|nbc|cbs|abc)[^)]*\)', '', text, flags=re.I)
+
+        # Remove "on TSN+:", "NBA on ESPN:", etc.
+        text = re.sub(r'(nfl|nba|nhl|mlb|ncaa[mfwb]?|soccer|epl|mls)\s+on\s+\w+\s*:?\s*', '', text, flags=re.I)
+
+        # Remove standalone league prefixes like "NCAA Basketball:", "NCAAM:", "College Basketball:"
+        text = re.sub(r'^(ncaa[mfwb]?|college)\s*(basketball|football|hockey)?\s*:?\s*', '', text, flags=re.I)
+
+        # Now apply standard normalization
+        return self._normalize_text(text)
+
+    def _find_separator(self, text: str) -> Tuple[Optional[str], int]:
+        """
+        Find the team separator in a normalized stream name.
+
+        Args:
+            text: Normalized stream name
+
+        Returns:
+            Tuple of (separator, position) or (None, -1) if not found
+        """
+        for sep in self.SEPARATORS:
+            pos = text.find(sep)
+            if pos > 0:  # Must have content before separator
+                return (sep, pos)
+
+        return (None, -1)
+
+    def _find_team_in_text(self, text: str, teams: List[Dict]) -> Optional[Dict]:
+        """
+        Find a team match in the given text.
+
+        Matching priority:
+        1. Exact match (text == search_name)
+        2. Text starts with search_name or vice versa (word boundary)
+        3. Whole word match (search_name appears as complete word in text)
+        4. Substring match (less preferred, lower confidence)
+
+        Args:
+            text: Normalized text to search in
+            teams: List of team dicts with _search_names
+
+        Returns:
+            Team dict with added 'confidence' key, or None
+        """
+        text = text.strip().lower()
+        if not text:
+            return None
+
+        # Track best matches by priority
+        exact_match = None
+        prefix_match = None
+        prefix_length = 0
+        word_match = None
+        word_length = 0
+        substring_match = None
+        substring_length = 0
+
+        for team in teams:
+            for search_name in team.get('_search_names', []):
+                if not search_name:
+                    continue
+
+                search_lower = search_name.lower()
+
+                # Priority 1: Exact match
+                if text == search_lower:
+                    return {**team, 'confidence': 1.0}
+
+                # Priority 2: Prefix match (text starts with search_name or vice versa)
+                if text.startswith(search_lower) or search_lower.startswith(text):
+                    match_len = min(len(text), len(search_lower))
+                    if match_len > prefix_length:
+                        prefix_match = team
+                        prefix_length = match_len
+
+                # Priority 3: Whole word match (with word boundaries)
+                # Check if search_name appears as a complete word in text
+                elif len(search_lower) >= 3:
+                    # Build regex pattern for word boundary matching
+                    pattern = r'\b' + re.escape(search_lower) + r'\b'
+                    if re.search(pattern, text):
+                        if len(search_lower) > word_length:
+                            word_match = team
+                            word_length = len(search_lower)
+                    # Also check if text appears as word in search_name
+                    elif re.search(r'\b' + re.escape(text) + r'\b', search_lower):
+                        if len(text) > word_length:
+                            word_match = team
+                            word_length = len(text)
+
+                # Priority 4: Substring match (fallback, lower confidence)
+                elif search_lower in text and len(search_lower) >= 4:
+                    if len(search_lower) > substring_length:
+                        substring_match = team
+                        substring_length = len(search_lower)
+
+        # Return best match by priority
+        if prefix_match:
+            return {**prefix_match, 'confidence': 0.95}
+        if word_match:
+            return {**word_match, 'confidence': 0.9}
+        if substring_match:
+            return {**substring_match, 'confidence': 0.7}
+
+        return None
+
+    def _lookup_alias(self, text: str, league: str) -> Optional[Dict]:
+        """
+        Look up user-defined alias in database.
+
+        Args:
+            text: Normalized team text
+            league: League code
+
+        Returns:
+            Dict with espn_team_id, espn_team_name or None
+        """
+        if not self.db_connection_func:
+            return None
+
+        try:
+            conn = self.db_connection_func()
+            cursor = conn.cursor()
+
+            # Look for exact alias match
+            result = cursor.execute(
+                """
+                SELECT espn_team_id, espn_team_name
+                FROM team_aliases
+                WHERE alias = ? AND league = ?
+                """,
+                (text.lower().strip(), league.lower())
+            ).fetchone()
+
+            conn.close()
+
+            if result:
+                return {
+                    'id': result[0],
+                    'name': result[1],
+                    'confidence': 1.0,
+                    'source': 'alias'
+                }
+            return None
+
+        except Exception as e:
+            logger.error(f"Error looking up alias '{text}' for {league}: {e}")
+            return None
+
+    def _find_team(self, text: str, league: str, teams: List[Dict]) -> Optional[Dict]:
+        """
+        Find a team match using aliases first, then ESPN data.
+
+        Args:
+            text: Text to search for team in
+            league: League code
+            teams: Cached team list for the league
+
+        Returns:
+            Team dict with id, name, confidence, or None
+        """
+        normalized = self._normalize_text(text)
+
+        if not normalized:
+            return None
+
+        # 1. Check user aliases first (highest priority)
+        alias_match = self._lookup_alias(normalized, league)
+        if alias_match:
+            logger.debug(f"Alias match: '{text}' -> {alias_match['name']}")
+            return alias_match
+
+        # 2. Check ESPN team database
+        team_match = self._find_team_in_text(normalized, teams)
+        if team_match:
+            logger.debug(f"ESPN match: '{text}' -> {team_match.get('name')}")
+            return team_match
+
+        # 3. No match found
+        logger.debug(f"No match for: '{text}' in {league}")
+        return None
+
+    def extract_teams(self, stream_name: str, league: str) -> Dict[str, Any]:
+        """
+        Extract team matchup from a stream/channel name.
+
+        Main entry point for team extraction.
+
+        Args:
+            stream_name: Raw stream/channel name
+                         (e.g., "NFL | 16 -8:15PM Giants at Patriots")
+            league: League code (e.g., "nfl", "epl")
+
+        Returns:
+            Dict with:
+            - matched: bool - whether both teams were found
+            - away_team_id, away_team_name: Away team info (if matched)
+            - home_team_id, home_team_name: Home team info (if matched)
+            - confidence: float - match confidence (1.0 = exact)
+            - reason: str - error reason if not matched
+            - raw_away, raw_home: Raw extracted strings (for debugging)
+            - game_date: datetime or None - extracted date from stream name
+        """
+        result = {
+            'matched': False,
+            'stream_name': stream_name,
+            'league': league,
+            'game_date': None,
+            'game_time': None
+        }
+
+        # Try to extract date and time from the stream name (for disambiguation)
+        extracted_date = extract_date_from_text(stream_name)
+        if extracted_date:
+            result['game_date'] = extracted_date
+            logger.debug(f"Extracted date from stream name: {extracted_date.date()}")
+
+        extracted_time = extract_time_from_text(stream_name)
+        if extracted_time:
+            result['game_time'] = extracted_time
+            logger.debug(f"Extracted time from stream name: {extracted_time.strftime('%H:%M')}")
+
+        # Get teams for this league
+        teams = self._get_teams_for_league(league)
+        if not teams:
+            result['reason'] = f'No team data available for league: {league}'
+            return result
+
+        # Normalize the stream name
+        normalized = self._normalize_for_stream(stream_name)
+        if not normalized:
+            result['reason'] = 'Stream name empty after normalization'
+            return result
+
+        # Find separator
+        separator, sep_pos = self._find_separator(normalized)
+        if not separator:
+            result['reason'] = f'No separator found in: {normalized}'
+            return result
+
+        # Split into away and home parts
+        # Convention: "Away vs/at Home" or "Away @ Home"
+        left_part = normalized[:sep_pos].strip()
+        right_part = normalized[sep_pos + len(separator):].strip()
+
+        result['raw_away'] = left_part
+        result['raw_home'] = right_part
+
+        # Handle "at" and "@" - left team is away, right is home
+        # Handle "vs" - left is typically away, right is home
+        # (This matches standard sports notation)
+
+        # Find both teams
+        away_team = self._find_team(left_part, league, teams)
+        home_team = self._find_team(right_part, league, teams)
+
+        if not away_team:
+            result['reason'] = f'Away team not found: {left_part}'
+            result['unmatched_team'] = left_part
+            return result
+
+        if not home_team:
+            result['reason'] = f'Home team not found: {right_part}'
+            result['unmatched_team'] = right_part
+            return result
+
+        # Both teams found!
+        result['matched'] = True
+        result['away_team_id'] = away_team.get('id')
+        result['away_team_name'] = away_team.get('name')
+        result['away_team_abbrev'] = away_team.get('abbreviation', '')
+        result['home_team_id'] = home_team.get('id')
+        result['home_team_name'] = home_team.get('name')
+        result['home_team_abbrev'] = home_team.get('abbreviation', '')
+        result['confidence'] = min(
+            away_team.get('confidence', 1.0),
+            home_team.get('confidence', 1.0)
+        )
+
+        return result
+
+    def clear_cache(self, league: str = None):
+        """
+        Clear the team cache.
+
+        Args:
+            league: Specific league to clear, or None to clear all
+        """
+        if league:
+            self._team_cache.pop(league.lower(), None)
+        else:
+            self._team_cache.clear()
+        logger.info(f"Team cache cleared: {league or 'all'}")
+
+    def get_teams_for_league(self, league: str) -> List[Dict]:
+        """
+        Public method to get teams for a league (for UI dropdowns, etc).
+
+        Args:
+            league: League code
+
+        Returns:
+            List of team dicts
+        """
+        teams = self._get_teams_for_league(league)
+        # Return clean version without internal search names
+        return [
+            {k: v for k, v in team.items() if not k.startswith('_')}
+            for team in teams
+        ]
+
+
+# Convenience function for standalone use
+def create_matcher():
+    """
+    Create a TeamMatcher instance with default configuration.
+
+    Returns:
+        Configured TeamMatcher instance
+    """
+    from api.espn_client import ESPNClient
+    from database import get_connection
+
+    espn = ESPNClient()
+    return TeamMatcher(espn, db_connection_func=get_connection)

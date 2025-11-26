@@ -565,5 +565,68 @@ ORDER BY timestamp DESC
 LIMIT 100;
 
 -- =============================================================================
+-- EVENT EPG GROUPS TABLE (Event Channel EPG Feature)
+-- Stores enabled M3U channel groups for event-based EPG generation
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS event_epg_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    -- Dispatcharr Integration
+    dispatcharr_group_id INTEGER NOT NULL UNIQUE,  -- Group ID from Dispatcharr
+    dispatcharr_account_id INTEGER NOT NULL,       -- M3U Account ID (for refresh + UI)
+    group_name TEXT NOT NULL,                      -- Exact group name (e.g., "USA | NFL Backup 🏈")
+
+    -- League/Sport Assignment
+    assigned_league TEXT NOT NULL,                 -- League code (e.g., "nfl", "epl", "nba")
+    assigned_sport TEXT NOT NULL,                  -- Sport type (e.g., "football", "soccer")
+
+    -- Status
+    enabled INTEGER DEFAULT 1,                     -- Is this group enabled for EPG generation?
+    refresh_interval_minutes INTEGER DEFAULT 60,   -- How often to regenerate EPG
+
+    -- Stats (updated after each generation)
+    last_refresh TIMESTAMP,                        -- Last time EPG was generated
+    stream_count INTEGER DEFAULT 0,                -- Number of streams in group
+    matched_count INTEGER DEFAULT 0                -- Number of streams matched to ESPN events
+);
+
+CREATE INDEX IF NOT EXISTS idx_event_epg_groups_league ON event_epg_groups(assigned_league);
+CREATE INDEX IF NOT EXISTS idx_event_epg_groups_enabled ON event_epg_groups(enabled);
+
+-- Trigger for updated_at
+CREATE TRIGGER IF NOT EXISTS update_event_epg_groups_timestamp
+AFTER UPDATE ON event_epg_groups
+FOR EACH ROW
+BEGIN
+    UPDATE event_epg_groups SET updated_at = CURRENT_TIMESTAMP WHERE id = OLD.id;
+END;
+
+-- =============================================================================
+-- TEAM ALIASES TABLE (Event Channel EPG Feature)
+-- User-defined team name aliases for matching stream names to ESPN teams
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS team_aliases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    -- Alias Definition
+    alias TEXT NOT NULL,                           -- Alias string (lowercase, normalized) e.g., "spurs", "man u"
+    league TEXT NOT NULL,                          -- League code (e.g., "epl", "nfl")
+
+    -- ESPN Team Mapping
+    espn_team_id TEXT NOT NULL,                    -- ESPN's team ID
+    espn_team_name TEXT NOT NULL,                  -- ESPN's team name (e.g., "Tottenham Hotspur")
+
+    UNIQUE(alias, league)
+);
+
+CREATE INDEX IF NOT EXISTS idx_team_aliases_league ON team_aliases(league);
+CREATE INDEX IF NOT EXISTS idx_team_aliases_alias ON team_aliases(alias);
+
+-- =============================================================================
 -- END OF SCHEMA
 -- =============================================================================

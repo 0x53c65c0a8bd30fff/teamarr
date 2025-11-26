@@ -127,6 +127,66 @@ def run_migrations(conn):
 
     conn.commit()
 
+    # Event EPG Groups table (added for Event Channel EPG feature)
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='event_epg_groups'")
+    if not cursor.fetchone():
+        try:
+            cursor.execute("""
+                CREATE TABLE event_epg_groups (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    dispatcharr_group_id INTEGER NOT NULL UNIQUE,
+                    dispatcharr_account_id INTEGER NOT NULL,
+                    group_name TEXT NOT NULL,
+                    assigned_league TEXT NOT NULL,
+                    assigned_sport TEXT NOT NULL,
+                    enabled INTEGER DEFAULT 1,
+                    refresh_interval_minutes INTEGER DEFAULT 60,
+                    last_refresh TIMESTAMP,
+                    stream_count INTEGER DEFAULT 0,
+                    matched_count INTEGER DEFAULT 0
+                )
+            """)
+            cursor.execute("CREATE INDEX idx_event_epg_groups_league ON event_epg_groups(assigned_league)")
+            cursor.execute("CREATE INDEX idx_event_epg_groups_enabled ON event_epg_groups(enabled)")
+            cursor.execute("""
+                CREATE TRIGGER update_event_epg_groups_timestamp
+                AFTER UPDATE ON event_epg_groups
+                FOR EACH ROW
+                BEGIN
+                    UPDATE event_epg_groups SET updated_at = CURRENT_TIMESTAMP WHERE id = OLD.id;
+                END
+            """)
+            migrations_run += 1
+            print("  ✅ Created table: event_epg_groups")
+        except Exception as e:
+            print(f"  ⚠️ Could not create event_epg_groups table: {e}")
+
+    # Team Aliases table (added for Event Channel EPG feature)
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='team_aliases'")
+    if not cursor.fetchone():
+        try:
+            cursor.execute("""
+                CREATE TABLE team_aliases (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    alias TEXT NOT NULL,
+                    league TEXT NOT NULL,
+                    espn_team_id TEXT NOT NULL,
+                    espn_team_name TEXT NOT NULL,
+                    UNIQUE(alias, league)
+                )
+            """)
+            cursor.execute("CREATE INDEX idx_team_aliases_league ON team_aliases(league)")
+            cursor.execute("CREATE INDEX idx_team_aliases_alias ON team_aliases(alias)")
+            migrations_run += 1
+            print("  ✅ Created table: team_aliases")
+        except Exception as e:
+            print(f"  ⚠️ Could not create team_aliases table: {e}")
+
+    conn.commit()
+
     return migrations_run
 
 
@@ -504,5 +564,363 @@ def bulk_set_active(team_ids: List[int], active: bool) -> int:
         """, [1 if active else 0] + team_ids)
         conn.commit()
         return cursor.rowcount
+    finally:
+        conn.close()
+
+
+# =============================================================================
+# Team Alias Functions (for Event Channel EPG)
+# =============================================================================
+
+def get_alias(alias_id: int) -> Optional[Dict[str, Any]]:
+    """Get a team alias by ID."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        result = cursor.execute(
+            "SELECT * FROM team_aliases WHERE id = ?",
+            (alias_id,)
+        ).fetchone()
+        return dict(result) if result else None
+    finally:
+        conn.close()
+
+
+def get_aliases_for_league(league: str) -> List[Dict[str, Any]]:
+    """Get all team aliases for a specific league."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        results = cursor.execute(
+            """
+            SELECT * FROM team_aliases
+            WHERE league = ?
+            ORDER BY alias
+            """,
+            (league.lower(),)
+        ).fetchall()
+        return [dict(row) for row in results]
+    finally:
+        conn.close()
+
+
+def get_all_aliases() -> List[Dict[str, Any]]:
+    """Get all team aliases."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        results = cursor.execute(
+            """
+            SELECT * FROM team_aliases
+            ORDER BY league, alias
+            """
+        ).fetchall()
+        return [dict(row) for row in results]
+    finally:
+        conn.close()
+
+
+def create_alias(alias: str, league: str, espn_team_id: str, espn_team_name: str) -> int:
+    """
+    Create a new team alias.
+
+    Args:
+        alias: The alias string (will be normalized to lowercase)
+        league: League code (e.g., 'nfl', 'epl')
+        espn_team_id: ESPN team ID
+        espn_team_name: ESPN team display name
+
+    Returns:
+        ID of created alias
+
+    Raises:
+        sqlite3.IntegrityError if alias already exists for this league
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO team_aliases (alias, league, espn_team_id, espn_team_name)
+            VALUES (?, ?, ?, ?)
+            """,
+            (alias.lower().strip(), league.lower(), espn_team_id, espn_team_name)
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def update_alias(alias_id: int, data: Dict[str, Any]) -> bool:
+    """
+    Update an existing alias.
+
+    Args:
+        alias_id: Alias ID to update
+        data: Dict with fields to update (alias, league, espn_team_id, espn_team_name)
+
+    Returns:
+        True if updated, False if not found
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Normalize alias if provided
+        if 'alias' in data:
+            data['alias'] = data['alias'].lower().strip()
+        if 'league' in data:
+            data['league'] = data['league'].lower()
+
+        fields = [k for k in data.keys() if k != 'id']
+        if not fields:
+            return False
+
+        set_clause = ', '.join([f"{f} = ?" for f in fields])
+        values = [data[f] for f in fields] + [alias_id]
+
+        cursor.execute(f"""
+            UPDATE team_aliases
+            SET {set_clause}
+            WHERE id = ?
+        """, values)
+
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def delete_alias(alias_id: int) -> bool:
+    """Delete a team alias."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM team_aliases WHERE id = ?", (alias_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def find_alias(alias: str, league: str) -> Optional[Dict[str, Any]]:
+    """
+    Find an alias by alias string and league.
+
+    Args:
+        alias: Alias string to look up
+        league: League code
+
+    Returns:
+        Alias dict or None if not found
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        result = cursor.execute(
+            """
+            SELECT * FROM team_aliases
+            WHERE alias = ? AND league = ?
+            """,
+            (alias.lower().strip(), league.lower())
+        ).fetchone()
+        return dict(result) if result else None
+    finally:
+        conn.close()
+
+
+def bulk_create_aliases(aliases: List[Dict[str, str]]) -> int:
+    """
+    Create multiple aliases at once.
+
+    Args:
+        aliases: List of dicts with alias, league, espn_team_id, espn_team_name
+
+    Returns:
+        Count of aliases created (skips duplicates)
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        created = 0
+
+        for a in aliases:
+            try:
+                cursor.execute(
+                    """
+                    INSERT OR IGNORE INTO team_aliases
+                    (alias, league, espn_team_id, espn_team_name)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        a['alias'].lower().strip(),
+                        a['league'].lower(),
+                        a['espn_team_id'],
+                        a['espn_team_name']
+                    )
+                )
+                if cursor.rowcount > 0:
+                    created += 1
+            except Exception as e:
+                print(f"Error creating alias {a.get('alias')}: {e}")
+                continue
+
+        conn.commit()
+        return created
+    finally:
+        conn.close()
+
+
+# =============================================================================
+# Event EPG Group Functions (for Event Channel EPG)
+# =============================================================================
+
+def get_event_epg_group(group_id: int) -> Optional[Dict[str, Any]]:
+    """Get an event EPG group by ID."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        result = cursor.execute(
+            "SELECT * FROM event_epg_groups WHERE id = ?",
+            (group_id,)
+        ).fetchone()
+        return dict(result) if result else None
+    finally:
+        conn.close()
+
+
+def get_event_epg_group_by_dispatcharr_id(dispatcharr_group_id: int) -> Optional[Dict[str, Any]]:
+    """Get an event EPG group by Dispatcharr group ID."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        result = cursor.execute(
+            "SELECT * FROM event_epg_groups WHERE dispatcharr_group_id = ?",
+            (dispatcharr_group_id,)
+        ).fetchone()
+        return dict(result) if result else None
+    finally:
+        conn.close()
+
+
+def get_all_event_epg_groups(enabled_only: bool = False) -> List[Dict[str, Any]]:
+    """Get all event EPG groups."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        query = "SELECT * FROM event_epg_groups"
+        if enabled_only:
+            query += " WHERE enabled = 1"
+        query += " ORDER BY group_name"
+
+        results = cursor.execute(query).fetchall()
+        return [dict(row) for row in results]
+    finally:
+        conn.close()
+
+
+def create_event_epg_group(
+    dispatcharr_group_id: int,
+    dispatcharr_account_id: int,
+    group_name: str,
+    assigned_league: str,
+    assigned_sport: str,
+    enabled: bool = True,
+    refresh_interval_minutes: int = 60
+) -> int:
+    """
+    Create a new event EPG group.
+
+    Returns:
+        ID of created group
+
+    Raises:
+        sqlite3.IntegrityError if dispatcharr_group_id already exists
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO event_epg_groups
+            (dispatcharr_group_id, dispatcharr_account_id, group_name,
+             assigned_league, assigned_sport, enabled, refresh_interval_minutes)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                dispatcharr_group_id, dispatcharr_account_id, group_name,
+                assigned_league.lower(), assigned_sport.lower(),
+                1 if enabled else 0, refresh_interval_minutes
+            )
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def update_event_epg_group(group_id: int, data: Dict[str, Any]) -> bool:
+    """Update an event EPG group."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Normalize league/sport if provided
+        if 'assigned_league' in data:
+            data['assigned_league'] = data['assigned_league'].lower()
+        if 'assigned_sport' in data:
+            data['assigned_sport'] = data['assigned_sport'].lower()
+
+        fields = [k for k in data.keys() if k != 'id']
+        if not fields:
+            return False
+
+        set_clause = ', '.join([f"{f} = ?" for f in fields])
+        values = [data[f] for f in fields] + [group_id]
+
+        cursor.execute(f"""
+            UPDATE event_epg_groups
+            SET {set_clause}
+            WHERE id = ?
+        """, values)
+
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def delete_event_epg_group(group_id: int) -> bool:
+    """Delete an event EPG group."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM event_epg_groups WHERE id = ?", (group_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def update_event_epg_group_stats(
+    group_id: int,
+    stream_count: int,
+    matched_count: int
+) -> bool:
+    """Update stats after EPG generation."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE event_epg_groups
+            SET stream_count = ?, matched_count = ?, last_refresh = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (stream_count, matched_count, group_id)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
     finally:
         conn.close()

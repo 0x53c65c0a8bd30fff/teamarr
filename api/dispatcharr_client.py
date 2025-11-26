@@ -410,3 +410,245 @@ class EPGManager:
                 "success": False,
                 "message": f"Error: {str(e)}"
             }
+
+
+class M3UManager:
+    """
+    M3U account and stream management for Dispatcharr.
+
+    Usage:
+        manager = M3UManager("http://localhost:9191", "admin", "password")
+        accounts = manager.list_m3u_accounts()
+        groups = manager.list_channel_groups(search="NFL")
+        streams = manager.list_streams(group_name="NFL Game Pass 🏈")
+    """
+
+    def __init__(self, url: str, username: str, password: str):
+        self.auth = DispatcharrAuth(url, username, password)
+        self._groups_cache: Optional[List[Dict]] = None
+
+    def list_m3u_accounts(self) -> List[Dict]:
+        """List all M3U accounts."""
+        response = self.auth.get("/api/m3u/accounts/")
+        if not response or response.status_code != 200:
+            logger.error(f"Failed to list M3U accounts: {response.status_code if response else 'No response'}")
+            return []
+        return response.json()
+
+    def list_channel_groups(self, search: Optional[str] = None) -> List[Dict]:
+        """
+        List channel groups, optionally filtered by name.
+
+        Args:
+            search: Filter by group name (case-insensitive substring match)
+
+        Returns:
+            List of group dicts with id, name, m3u_accounts
+        """
+        response = self.auth.get("/api/channels/groups/")
+        if not response or response.status_code != 200:
+            logger.error(f"Failed to list channel groups: {response.status_code if response else 'No response'}")
+            return []
+
+        groups = response.json()
+        self._groups_cache = groups  # Cache for name lookups
+
+        if search:
+            search_lower = search.lower()
+            groups = [g for g in groups if search_lower in g.get('name', '').lower()]
+
+        return groups
+
+    def get_group_name(self, group_id: int) -> Optional[str]:
+        """Get exact group name by ID (needed for stream filtering)."""
+        if self._groups_cache is None:
+            self.list_channel_groups()
+
+        group = next((g for g in (self._groups_cache or []) if g.get('id') == group_id), None)
+        return group.get('name') if group else None
+
+    def list_streams(
+        self,
+        group_name: Optional[str] = None,
+        group_id: Optional[int] = None,
+        account_id: Optional[int] = None,
+        limit: Optional[int] = None
+    ) -> List[Dict]:
+        """
+        List streams from Dispatcharr.
+
+        Filter by group using exact group_name (preferred) or group_id (requires lookup).
+        The API's channel_group_name filter requires exact match including emoji.
+
+        Args:
+            group_name: Exact group name (e.g., "NFL Game Pass 🏈")
+            group_id: Group ID (will lookup name if group_name not provided)
+            account_id: Filter by M3U account ID
+            limit: Maximum streams to return
+
+        Returns:
+            List of stream dicts with id, name, url, channel_group, tvg_id, etc.
+        """
+        import urllib.parse
+
+        # Resolve group_name from group_id if needed
+        if group_name is None and group_id is not None:
+            group_name = self.get_group_name(group_id)
+
+        # Build query params
+        params = ["page_size=1000"]
+        if group_name:
+            params.append(f"channel_group_name={urllib.parse.quote(group_name)}")
+        if account_id is not None:
+            params.append(f"m3u_account={account_id}")
+
+        response = self.auth.get(f"/api/channels/streams/?{'&'.join(params)}")
+        if not response or response.status_code != 200:
+            logger.error(f"Failed to list streams: {response.status_code if response else 'No response'}")
+            return []
+
+        data = response.json()
+        streams = data.get('results', []) if isinstance(data, dict) else data
+
+        if limit:
+            streams = streams[:limit]
+
+        return streams
+
+    def get_group_with_streams(self, group_id: int, stream_limit: int = 50) -> Optional[Dict]:
+        """
+        Get group info with its streams for UI preview.
+
+        Returns:
+            {"group": {...}, "streams": [...], "total_streams": int}
+        """
+        if self._groups_cache is None:
+            self.list_channel_groups()
+
+        group = next((g for g in (self._groups_cache or []) if g.get('id') == group_id), None)
+        if not group:
+            return None
+
+        streams = self.list_streams(group_name=group.get('name'))
+
+        return {
+            "group": group,
+            "streams": streams[:stream_limit],
+            "total_streams": len(streams)
+        }
+
+    def refresh_m3u_account(self, account_id: int) -> Dict[str, Any]:
+        """Trigger M3U refresh for an account (async, returns immediately)."""
+        response = self.auth.post(f"/api/m3u/refresh/{account_id}/")
+
+        if not response:
+            return {"success": False, "message": "Request failed"}
+
+        if response.status_code in (200, 202):
+            return {"success": True, "message": "M3U refresh initiated"}
+        return {"success": False, "message": f"HTTP {response.status_code}"}
+
+    def get_account(self, account_id: int) -> Optional[Dict]:
+        """Get a single M3U account by ID."""
+        response = self.auth.get(f"/api/m3u/accounts/{account_id}/")
+        if not response or response.status_code != 200:
+            return None
+        return response.json()
+
+    def wait_for_refresh(
+        self,
+        account_id: int,
+        timeout: int = 120,
+        poll_interval: int = 2
+    ) -> Dict[str, Any]:
+        """
+        Trigger M3U refresh and wait for completion.
+
+        This ensures streams are updated before we fetch them for EPG generation.
+        Uses polling to detect when refresh completes by monitoring updated_at.
+
+        Args:
+            account_id: M3U account ID to refresh
+            timeout: Maximum seconds to wait (default: 120)
+            poll_interval: Seconds between status checks (default: 2)
+
+        Returns:
+            Result dict with:
+            - success: bool
+            - message: str
+            - duration: float (seconds taken)
+            - account: dict (final account state if successful)
+        """
+        import time
+
+        # Get current state
+        before = self.get_account(account_id)
+        if not before:
+            return {"success": False, "message": f"Account {account_id} not found"}
+
+        before_updated = before.get('updated_at')
+
+        # Trigger refresh
+        trigger_result = self.refresh_m3u_account(account_id)
+        if not trigger_result.get('success'):
+            return trigger_result
+
+        # Poll until updated_at changes or status indicates completion/error
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            time.sleep(poll_interval)
+
+            current = self.get_account(account_id)
+            if not current:
+                continue
+
+            current_status = current.get('status', '')
+            current_updated = current.get('updated_at')
+
+            # Check if refresh completed (updated_at changed)
+            if current_updated != before_updated:
+                duration = time.time() - start_time
+                if current_status == 'success':
+                    return {
+                        "success": True,
+                        "message": current.get('last_message', 'Refresh completed'),
+                        "duration": duration,
+                        "account": current
+                    }
+                elif current_status == 'error':
+                    return {
+                        "success": False,
+                        "message": current.get('last_message', 'Refresh failed'),
+                        "duration": duration,
+                        "account": current
+                    }
+
+            # Check for error status even if updated_at hasn't changed
+            if current_status == 'error':
+                return {
+                    "success": False,
+                    "message": current.get('last_message', 'Refresh failed'),
+                    "duration": time.time() - start_time
+                }
+
+        # Timeout
+        return {
+            "success": False,
+            "message": f"Refresh timed out after {timeout} seconds",
+            "duration": timeout
+        }
+
+    def test_connection(self) -> Dict[str, Any]:
+        """Test connection to Dispatcharr."""
+        try:
+            if not self.auth.get_token():
+                return {"success": False, "message": "Authentication failed"}
+
+            accounts = self.list_m3u_accounts()
+            return {
+                "success": True,
+                "message": f"Connected. Found {len(accounts)} M3U account(s).",
+                "accounts": accounts
+            }
+        except Exception as e:
+            return {"success": False, "message": str(e)}
