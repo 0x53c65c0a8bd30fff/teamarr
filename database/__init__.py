@@ -106,6 +106,27 @@ def run_migrations(conn):
 
     conn.commit()
 
+    # EPG history filler count columns (added in v1.1.0)
+    cursor.execute("PRAGMA table_info(epg_history)")
+    epg_history_columns = {row[1] for row in cursor.fetchall()}
+
+    epg_history_new_columns = [
+        ("num_pregame", "INTEGER DEFAULT 0"),
+        ("num_postgame", "INTEGER DEFAULT 0"),
+        ("num_idle", "INTEGER DEFAULT 0"),
+    ]
+
+    for col_name, col_def in epg_history_new_columns:
+        if col_name not in epg_history_columns:
+            try:
+                cursor.execute(f"ALTER TABLE epg_history ADD COLUMN {col_name} {col_def}")
+                migrations_run += 1
+                print(f"  ✅ Added column: epg_history.{col_name}")
+            except Exception as e:
+                print(f"  ⚠️ Could not add column {col_name}: {e}")
+
+    conn.commit()
+
     return migrations_run
 
 
