@@ -3288,6 +3288,64 @@
       }
     },
     {
+      "name": "home_team_pascal",
+      "description": "Home team name in PascalCase (for channel IDs)",
+      "source": "`/schedule` → competitors",
+      "category": "🏠 Teams (Home/Away)",
+      "icon": "🏀",
+      "type": "string",
+      "availability": "always",
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball"
+      ],
+      "available_suffixes": [
+        "base",
+        "next",
+        "last"
+      ],
+      "examples_by_sport": {
+        "NBA": "DetroitPistons",
+        "NFL": "DetroitLions",
+        "MLB": "DetroitTigers",
+        "NHL": "DetroitRedWings",
+        "NCAAM": "MichiganWolverines",
+        "NCAAF": "MichiganWolverines",
+        "Soccer": "Liverpool"
+      }
+    },
+    {
+      "name": "away_team_pascal",
+      "description": "Away team name in PascalCase (for channel IDs)",
+      "source": "`/schedule` → competitors",
+      "category": "🏠 Teams (Home/Away)",
+      "icon": "🏀",
+      "type": "string",
+      "availability": "always",
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball"
+      ],
+      "available_suffixes": [
+        "base",
+        "next",
+        "last"
+      ],
+      "examples_by_sport": {
+        "NBA": "IndianaPacers",
+        "NFL": "GreenBayPackers",
+        "MLB": "ClevelandGuardians",
+        "NHL": "StLouisBlues",
+        "NCAAM": "OhioStateBuckeyes",
+        "NCAAF": "OhioStateBuckeyes",
+        "Soccer": "ManchesterCity"
+      }
+    },
+    {
       "name": "home_team_abbrev",
       "description": "Home team abbreviation",
       "source": "`/schedule` \u2192 competitors \u2192 abbrev",

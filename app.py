@@ -27,6 +27,7 @@ from api.espn_client import ESPNClient
 from epg.orchestrator import EPGOrchestrator
 from epg.xmltv_generator import XMLTVGenerator
 from utils.logger import setup_logging, get_logger
+from utils import to_pascal_case
 from config import VERSION
 
 app = Flask(__name__)
@@ -638,9 +639,9 @@ def teams_bulk_change_channel_id():
 
                 team_dict = dict(team)
 
-                # Generate team_name_pascal (PascalCase): "Detroit Pistons" -> "DetroitPistons"
+                # Generate team_name_pascal (PascalCase)
                 team_name = team_dict.get('team_name', '')
-                team_name_pascal = ''.join(word.capitalize() for word in team_name.split())
+                team_name_pascal = to_pascal_case(team_name)
 
                 # Get league_name for uppercase league variable
                 league_name_row = cursor.execute(
@@ -729,11 +730,12 @@ def epg_management():
 
     # Get latest EPG generation info
     conn = get_connection()
-    latest_epg = conn.execute("""
+    latest_epg_row = conn.execute("""
         SELECT * FROM epg_history
         ORDER BY generated_at DESC
         LIMIT 1
     """).fetchone()
+    latest_epg = dict(latest_epg_row) if latest_epg_row else None
 
     settings = dict(conn.execute("SELECT * FROM settings WHERE id = 1").fetchone())
     conn.close()
@@ -786,7 +788,7 @@ def epg_management():
     epg_url = f"{request.url_root}teamarr.xml"
 
     return render_template('epg_management.html',
-                         latest_epg=dict(latest_epg) if latest_epg else None,
+                         latest_epg=latest_epg,
                          epg_file_exists=epg_file_exists,
                          epg_filename=epg_filename,
                          epg_file_size=epg_file_size,
@@ -1037,17 +1039,26 @@ def generate_epg():
         app.logger.info(f"✅ EPG generated successfully: {total_programmes} programmes, {generation_time:.2f}s")
 
         # Dispatcharr auto-refresh hook
-        if settings.get('dispatcharr_enabled') and settings.get('dispatcharr_epg_id'):
+        dispatcharr_enabled = settings.get('dispatcharr_enabled')
+        dispatcharr_epg_id = settings.get('dispatcharr_epg_id')
+        app.logger.debug(f"[Dispatcharr] Hook check: enabled={dispatcharr_enabled}, epg_id={dispatcharr_epg_id}")
+
+        if dispatcharr_enabled and dispatcharr_epg_id:
             try:
                 from api.dispatcharr_client import EPGManager
 
+                dispatcharr_url = settings.get('dispatcharr_url')
+                dispatcharr_username = settings.get('dispatcharr_username')
+                dispatcharr_password = settings.get('dispatcharr_password')
+
+                app.logger.debug(f"[Dispatcharr] Config: url={dispatcharr_url}, username={dispatcharr_username}, password={'*' * len(dispatcharr_password) if dispatcharr_password else 'None'}")
                 app.logger.info("🔄 Triggering Dispatcharr EPG refresh...")
-                manager = EPGManager(
-                    settings.get('dispatcharr_url'),
-                    settings.get('dispatcharr_username'),
-                    settings.get('dispatcharr_password')
-                )
-                refresh_result = manager.refresh(settings.get('dispatcharr_epg_id'))
+
+                manager = EPGManager(dispatcharr_url, dispatcharr_username, dispatcharr_password)
+                app.logger.debug(f"[Dispatcharr] EPGManager created, calling refresh(epg_id={dispatcharr_epg_id})")
+
+                refresh_result = manager.refresh(dispatcharr_epg_id)
+                app.logger.debug(f"[Dispatcharr] Refresh result: {refresh_result}")
 
                 if refresh_result['success']:
                     # Update last sync time
@@ -1064,6 +1075,8 @@ def generate_epg():
 
             except Exception as e:
                 app.logger.error(f"❌ Dispatcharr refresh error: {e}")
+                import traceback
+                app.logger.debug(f"[Dispatcharr] Traceback: {traceback.format_exc()}")
 
         # Return JSON for scheduler, redirect for web UI
         if request.accept_mimetypes.accept_json and not request.accept_mimetypes.accept_html:
@@ -1829,7 +1842,7 @@ def _generate_channel_id(format_template, **kwargs):
 
     # Get team name and convert to PascalCase
     team_name = kwargs.get('team_name', '')
-    team_name_pascal = ''.join(word.capitalize() for word in team_name.split())
+    team_name_pascal = to_pascal_case(team_name)
 
     # Get league code and league name
     league_code = kwargs.get('league', '')

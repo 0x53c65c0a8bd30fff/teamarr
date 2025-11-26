@@ -268,9 +268,10 @@ function generateChannelId(format) {
         return '';
     }
 
-    // Convert team_name to PascalCase (e.g., "Detroit Pistons" -> "DetroitPistons")
+    // Convert team_name to PascalCase, stripping punctuation (e.g., "St. Louis Blues" -> "StLouisBlues")
     const teamNamePascal = teamName
         .split(/\s+/)
+        .map(word => word.replace(/[^a-zA-Z0-9]/g, ''))
         .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
         .join('');
 

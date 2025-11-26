@@ -5,6 +5,8 @@ import random
 import json
 import re
 
+from utils import to_pascal_case
+
 class TemplateEngine:
     """Resolves template variables in user-defined strings"""
 
@@ -131,9 +133,8 @@ class TemplateEngine:
         variables['team_abbrev'] = our_team.get('abbrev', '') or team_config.get('team_abbrev', '')
         variables['team_abbrev_lower'] = variables['team_abbrev'].lower()
 
-        # Team name in PascalCase for channel IDs (e.g., "Anaheim Ducks" -> "AnaheimDucks")
-        team_name = variables['team_name']
-        variables['team_name_pascal'] = ''.join(word.capitalize() for word in team_name.split())
+        # Team name in PascalCase for channel IDs
+        variables['team_name_pascal'] = to_pascal_case(variables['team_name'])
 
         variables['opponent'] = opponent.get('name', '')
         variables['opponent_abbrev'] = opponent.get('abbrev', '')
@@ -283,6 +284,8 @@ class TemplateEngine:
         variables['vs_at'] = 'vs' if is_home else '@'
         variables['home_team'] = home_team.get('name', '')
         variables['away_team'] = away_team.get('name', '')
+        variables['home_team_pascal'] = to_pascal_case(variables['home_team'])
+        variables['away_team_pascal'] = to_pascal_case(variables['away_team'])
         variables['home_team_abbrev'] = home_team.get('abbrev', '')
         variables['home_team_abbrev_lower'] = variables['home_team_abbrev'].lower()
         variables['away_team_abbrev'] = away_team.get('abbrev', '')
