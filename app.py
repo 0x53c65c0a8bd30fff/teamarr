@@ -767,10 +767,17 @@ def epg_management():
             # Analyze EPG content
             epg_analysis = _analyze_epg_content(epg_content)
 
-            # Override total_events with authoritative count from epg_history
-            # (the analysis function guesses using keywords, but we know the real count from generation)
-            if latest_epg and latest_epg.get('num_events') is not None:
-                epg_analysis['total_events'] = latest_epg['num_events']
+            # Override counts with authoritative values from epg_history
+            # (the analysis function guesses using keywords, but we know the real counts from generation)
+            if latest_epg:
+                if latest_epg.get('num_events') is not None:
+                    epg_analysis['total_events'] = latest_epg['num_events']
+                if latest_epg.get('num_pregame') is not None:
+                    epg_analysis['filler_programs']['pregame'] = latest_epg['num_pregame']
+                if latest_epg.get('num_postgame') is not None:
+                    epg_analysis['filler_programs']['postgame'] = latest_epg['num_postgame']
+                if latest_epg.get('num_idle') is not None:
+                    epg_analysis['filler_programs']['idle'] = latest_epg['num_idle']
         except Exception as e:
             app.logger.error(f"Error reading EPG file: {e}")
             epg_content = None
@@ -1005,14 +1012,22 @@ def generate_epg():
             for events in result['all_events'].values()
         )
 
+        # Count filler by type
+        all_events_flat = [e for events in result['all_events'].values() for e in events]
+        num_pregame = len([e for e in all_events_flat if e.get('filler_type') == 'pregame'])
+        num_postgame = len([e for e in all_events_flat if e.get('filler_type') == 'postgame'])
+        num_idle = len([e for e in all_events_flat if e.get('filler_type') == 'idle'])
+
         # Log to history
         cursor.execute("""
             INSERT INTO epg_history (
                 file_path, file_size, num_channels, num_programmes, num_events,
+                num_pregame, num_postgame, num_idle,
                 generation_time_seconds, api_calls_made, file_hash, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             output_path, file_size, len(result['teams_list']), total_programmes, total_events,
+            num_pregame, num_postgame, num_idle,
             generation_time, result.get('api_calls', 0), file_hash, 'success'
         ))
 
@@ -1077,10 +1092,12 @@ def generate_epg():
             cursor.execute("""
                 INSERT INTO epg_history (
                     file_path, file_size, num_channels, num_programmes, num_events,
+                    num_pregame, num_postgame, num_idle,
                     generation_time_seconds, api_calls_made, file_hash, status, error_message
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 'failed', 0, 0, 0, 0,
+                0, 0, 0,
                 generation_time, 0, '', 'error', str(e)
             ))
             conn.commit()
@@ -1215,15 +1232,20 @@ def generate_epg_stream():
             generation_time = result['stats'].get('generation_time', 0)
             total_programmes = result['stats'].get('num_programmes', 0)
             total_events = result['stats'].get('num_events', 0)
+            num_pregame = result['stats'].get('num_pregame', 0)
+            num_postgame = result['stats'].get('num_postgame', 0)
+            num_idle = result['stats'].get('num_idle', 0)
 
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO epg_history (
                     file_path, file_size, num_channels, num_programmes, num_events,
+                    num_pregame, num_postgame, num_idle,
                     generation_time_seconds, api_calls_made, file_hash, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 output_path, file_size, len(result['teams_list']), total_programmes, total_events,
+                num_pregame, num_postgame, num_idle,
                 generation_time, result.get('api_calls', 0), file_hash, 'success'
             ))
             conn.commit()

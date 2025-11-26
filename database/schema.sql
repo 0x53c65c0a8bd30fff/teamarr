@@ -332,6 +332,9 @@ CREATE TABLE IF NOT EXISTS epg_history (
     num_channels INTEGER,                   -- Number of channels in EPG
     num_programmes INTEGER,                 -- Number of programmes in EPG (includes filler)
     num_events INTEGER,                     -- Number of actual sporting events (excludes filler)
+    num_pregame INTEGER DEFAULT 0,          -- Number of pregame filler programs
+    num_postgame INTEGER DEFAULT 0,         -- Number of postgame filler programs
+    num_idle INTEGER DEFAULT 0,             -- Number of idle filler programs
     date_range_start DATE,                  -- First programme date
     date_range_end DATE,                    -- Last programme date
 

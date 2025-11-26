@@ -196,10 +196,19 @@ class EPGOrchestrator:
             for events in all_events.values()
         )
 
+        # Count filler by type
+        all_events_flat = [e for events in all_events.values() for e in events]
+        num_pregame = len([e for e in all_events_flat if e.get('filler_type') == 'pregame'])
+        num_postgame = len([e for e in all_events_flat if e.get('filler_type') == 'postgame'])
+        num_idle = len([e for e in all_events_flat if e.get('filler_type') == 'idle'])
+
         stats = {
             'num_channels': len(teams_list),
             'num_programmes': total_programmes,
             'num_events': total_events,
+            'num_pregame': num_pregame,
+            'num_postgame': num_postgame,
+            'num_idle': num_idle,
             'api_calls': self.api_calls,
             'generation_time': generation_time
         }
