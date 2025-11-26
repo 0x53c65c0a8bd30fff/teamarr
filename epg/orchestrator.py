@@ -8,7 +8,7 @@ This module orchestrates the EPG generation process:
 5. Generates filler content
 6. Returns data ready for XMLTV generation
 """
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from zoneinfo import ZoneInfo
 import json
@@ -196,10 +196,19 @@ class EPGOrchestrator:
             for events in all_events.values()
         )
 
+        # Count filler by type
+        all_events_flat = [e for events in all_events.values() for e in events]
+        num_pregame = len([e for e in all_events_flat if e.get('filler_type') == 'pregame'])
+        num_postgame = len([e for e in all_events_flat if e.get('filler_type') == 'postgame'])
+        num_idle = len([e for e in all_events_flat if e.get('filler_type') == 'idle'])
+
         stats = {
             'num_channels': len(teams_list),
             'num_programmes': total_programmes,
             'num_events': total_events,
+            'num_pregame': num_pregame,
+            'num_postgame': num_postgame,
+            'num_idle': num_idle,
             'api_calls': self.api_calls,
             'generation_time': generation_time
         }
@@ -976,24 +985,8 @@ class EPGOrchestrator:
             'player_leaders': {}
         }
 
-        # Find LAST game (relative to this event's date, not real-world date)
-        last_event = None
-        if extended_events:
-            # Find most recent completed game before this event's date
-            for ext_event in reversed(extended_events):
-                ext_date_str = ext_event.get('date')
-                ext_status = ext_event.get('status', {})
-                is_completed = ext_status.get('completed', False) or ext_status.get('state') == 'post'
-
-                if ext_date_str and is_completed:
-                    try:
-                        ext_datetime = datetime.fromisoformat(ext_date_str.replace('Z', '+00:00'))
-                        ext_date = ext_datetime.astimezone(ZoneInfo(epg_timezone)).date()
-                        if ext_date < program_date:
-                            last_event = ext_event
-                            break
-                    except:
-                        continue
+        # Find LAST game (most recent game that has started, regardless of completion status)
+        last_event = self._find_last_started_game(events=extended_events or [])
 
         # Build LAST game context
         last_context = self._build_full_game_context(
@@ -1220,11 +1213,11 @@ class EPGOrchestrator:
 
                     # Only create pregame if not already filled by previous day's midnight crossing
                     if not skip_pregame and day_start < first_game_start:
-                        # Find last game before this pregame period
-                        last_game = self._find_last_game(
-                            current_date,
-                            extended_game_schedule or game_schedule,
-                            extended_game_dates or game_dates
+                        # Find most recent game that has started
+                        last_game = self._find_last_started_game(
+                            game_schedule=extended_game_schedule or game_schedule,
+                            game_dates=extended_game_dates or game_dates,
+                            current_date=current_date
                         )
 
                         # Enrich last game with scoreboard data to get final scores
@@ -1315,11 +1308,11 @@ class EPGOrchestrator:
                         extended_game_dates or game_dates
                     )
 
-                    # Find last game before current_date
-                    last_game = self._find_last_game(
-                        current_date,
-                        extended_game_schedule or game_schedule,
-                        extended_game_dates or game_dates
+                    # Find most recent game that has started
+                    last_game = self._find_last_started_game(
+                        game_schedule=extended_game_schedule or game_schedule,
+                        game_dates=extended_game_dates or game_dates,
+                        current_date=current_date
                     )
 
                     # Enrich last game with scoreboard data to get final scores
@@ -1419,8 +1412,19 @@ class EPGOrchestrator:
         # Get templates for this filler type
         title_template = team.get(f'{filler_type}_title', f'{filler_type.capitalize()} Coverage')
         subtitle_template = team.get(f'{filler_type}_subtitle', '')
-        desc_template = team.get(f'{filler_type}_description', '')
         art_url_template = team.get(f'{filler_type}_art_url', '')
+
+        # Description template - check for conditional mode (postgame/idle only)
+        desc_template = team.get(f'{filler_type}_description', '')
+        if filler_type in ['postgame', 'idle'] and team.get(f'{filler_type}_conditional_enabled'):
+            # Check if last game is final (consistent with template_engine logic)
+            last_game_status = (last_game_event or {}).get('status', {})
+            is_last_game_final = last_game_status.get('name', '') in ['STATUS_FINAL', 'Final']
+
+            if is_last_game_final:
+                desc_template = team.get(f'{filler_type}_description_final', desc_template)
+            else:
+                desc_template = team.get(f'{filler_type}_description_not_final', desc_template)
 
         # Get program datetime for relative next/last game finding
         program_datetime = start_dt
@@ -1533,15 +1537,65 @@ class EPGOrchestrator:
                     return sorted(future_games, key=lambda x: x['start'])[0]['event']
         return None
 
-    def _find_last_game(self, current_date: date, game_schedule: dict, game_dates: set) -> Optional[dict]:
-        """Find the most recent game before the given date"""
-        for past_date in sorted(game_dates, reverse=True):
-            if past_date < current_date:
-                past_games = game_schedule[past_date]
-                if past_games:
-                    # Return the latest game on that date
-                    return sorted(past_games, key=lambda x: x['end'])[-1]['event']
-        return None
+    def _find_last_started_game(self, events: List[dict] = None,
+                                   game_schedule: dict = None, game_dates: set = None,
+                                   current_date: date = None,
+                                   before_datetime: datetime = None) -> Optional[dict]:
+        """
+        Find the most recent game that has STARTED, regardless of completion status.
+
+        Returns the most recent game whose start time is before the reference time.
+        The game may be in-progress, final, postponed, etc. - status doesn't matter
+        for selection. The caller/template engine will check completion status
+        separately to determine if result-related variables should be populated.
+
+        Args:
+            events: List of raw event dicts (with 'date' ISO string and 'status' fields)
+            game_schedule: Alternative input - dict keyed by date with game entries
+            game_dates: Required if using game_schedule - set of dates with games
+            current_date: Required if using game_schedule - search this date and earlier
+            before_datetime: Only include games that started before this time (defaults to now)
+
+        Returns:
+            Most recent started event, or None
+        """
+        # If game_schedule provided, flatten it to events list
+        if events is None and game_schedule is not None:
+            events = []
+            for game_date in (game_dates or []):
+                if current_date is None or game_date <= current_date:
+                    for game_entry in game_schedule.get(game_date, []):
+                        event = game_entry.get('event', {})
+                        if event:
+                            events.append(event)
+
+        if not events:
+            return None
+
+        # Default to now if no before_datetime specified
+        if before_datetime is None:
+            before_datetime = datetime.now(tz=timezone.utc)
+
+        started_games = []
+
+        for event in events:
+            event_date_str = event.get('date', '')
+            if not event_date_str:
+                continue
+
+            try:
+                event_datetime = datetime.fromisoformat(event_date_str.replace('Z', '+00:00'))
+                # Only include games that have already started
+                if event_datetime <= before_datetime:
+                    started_games.append((event_datetime, event))
+            except:
+                continue
+
+        if not started_games:
+            return None
+
+        # Return the most recent one (latest start time)
+        return max(started_games, key=lambda x: x[0])[1]
 
     def _enrich_last_game_with_score(self, last_game: Optional[dict], api_sport: str, api_league: str,
                                       api_calls_counter: dict, epg_timezone: str = 'America/New_York') -> Optional[dict]:
@@ -2040,19 +2094,13 @@ class EPGOrchestrator:
         mode = team.get('game_duration_mode', 'default')
 
         if mode == 'custom':
-            # Use custom override
+            # Use custom override from template
             return float(team.get('game_duration_override', 4.0))
         elif mode == 'sport':
-            # Use sport-specific recommendation
+            # Use sport-specific value from settings
             sport = team.get('sport', 'basketball').lower()
-            sport_defaults = {
-                'basketball': 3.0,
-                'football': 3.5,
-                'soccer': 2.0,
-                'baseball': 3.0,
-                'hockey': 3.0
-            }
-            return float(sport_defaults.get(sport, 3.0))
+            sport_key = f'game_duration_{sport}'
+            return float(settings.get(sport_key, settings.get('game_duration_default', 4.0)))
         else:  # mode == 'default'
             # Use global default from settings
             return float(settings.get('game_duration_default', 4.0))

@@ -766,6 +766,18 @@ def epg_management():
 
             # Analyze EPG content
             epg_analysis = _analyze_epg_content(epg_content)
+
+            # Override counts with authoritative values from epg_history
+            # (the analysis function guesses using keywords, but we know the real counts from generation)
+            if latest_epg:
+                if latest_epg.get('num_events') is not None:
+                    epg_analysis['total_events'] = latest_epg['num_events']
+                if latest_epg.get('num_pregame') is not None:
+                    epg_analysis['filler_programs']['pregame'] = latest_epg['num_pregame']
+                if latest_epg.get('num_postgame') is not None:
+                    epg_analysis['filler_programs']['postgame'] = latest_epg['num_postgame']
+                if latest_epg.get('num_idle') is not None:
+                    epg_analysis['filler_programs']['idle'] = latest_epg['num_idle']
         except Exception as e:
             app.logger.error(f"Error reading EPG file: {e}")
             epg_content = None
@@ -1000,14 +1012,22 @@ def generate_epg():
             for events in result['all_events'].values()
         )
 
+        # Count filler by type
+        all_events_flat = [e for events in result['all_events'].values() for e in events]
+        num_pregame = len([e for e in all_events_flat if e.get('filler_type') == 'pregame'])
+        num_postgame = len([e for e in all_events_flat if e.get('filler_type') == 'postgame'])
+        num_idle = len([e for e in all_events_flat if e.get('filler_type') == 'idle'])
+
         # Log to history
         cursor.execute("""
             INSERT INTO epg_history (
                 file_path, file_size, num_channels, num_programmes, num_events,
+                num_pregame, num_postgame, num_idle,
                 generation_time_seconds, api_calls_made, file_hash, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             output_path, file_size, len(result['teams_list']), total_programmes, total_events,
+            num_pregame, num_postgame, num_idle,
             generation_time, result.get('api_calls', 0), file_hash, 'success'
         ))
 
@@ -1072,10 +1092,12 @@ def generate_epg():
             cursor.execute("""
                 INSERT INTO epg_history (
                     file_path, file_size, num_channels, num_programmes, num_events,
+                    num_pregame, num_postgame, num_idle,
                     generation_time_seconds, api_calls_made, file_hash, status, error_message
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 'failed', 0, 0, 0, 0,
+                0, 0, 0,
                 generation_time, 0, '', 'error', str(e)
             ))
             conn.commit()
@@ -1210,15 +1232,20 @@ def generate_epg_stream():
             generation_time = result['stats'].get('generation_time', 0)
             total_programmes = result['stats'].get('num_programmes', 0)
             total_events = result['stats'].get('num_events', 0)
+            num_pregame = result['stats'].get('num_pregame', 0)
+            num_postgame = result['stats'].get('num_postgame', 0)
+            num_idle = result['stats'].get('num_idle', 0)
 
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO epg_history (
                     file_path, file_size, num_channels, num_programmes, num_events,
+                    num_pregame, num_postgame, num_idle,
                     generation_time_seconds, api_calls_made, file_hash, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 output_path, file_size, len(result['teams_list']), total_programmes, total_events,
+                num_pregame, num_postgame, num_idle,
                 generation_time, result.get('api_calls', 0), file_hash, 'success'
             ))
             conn.commit()
@@ -1314,7 +1341,7 @@ def api_parse_espn_url():
         settings = conn.execute("SELECT default_channel_id_format FROM settings WHERE id = 1").fetchone()
         conn.close()
 
-        channel_id_format = settings['default_channel_id_format'] if settings else '{team_abbrev}.{league}'
+        channel_id_format = settings['default_channel_id_format'] if settings else '{team_name_pascal}.{league_id}'
 
         # Generate suggested channel ID
         team_data['channel_id'] = _generate_channel_id(
@@ -1593,7 +1620,7 @@ def api_teams_bulk_import():
         settings = conn.execute("SELECT default_channel_id_format FROM settings WHERE id = 1").fetchone()
         conn.close()
 
-        channel_id_format = settings['default_channel_id_format'] if settings else '{team_abbrev}.{league}'
+        channel_id_format = settings['default_channel_id_format'] if settings else '{team_name_pascal}.{league_id}'
 
         imported_count = 0
         skipped_count = 0
@@ -1728,23 +1755,6 @@ def _analyze_epg_content(xml_content):
                         if var not in analysis['unreplaced_variables']:
                             analysis['unreplaced_variables'].append(var)
 
-            # Classify program type
-            is_filler = False
-            if title:
-                title_lower = title.lower()
-                if 'pregame' in title_lower or 'pre-game' in title_lower or 'preview' in title_lower or 'starting soon' in title_lower:
-                    analysis['filler_programs']['pregame'] += 1
-                    is_filler = True
-                elif 'postgame' in title_lower or 'post-game' in title_lower or 'recap' in title_lower or 'highlights' in title_lower or 'replay' in title_lower:
-                    analysis['filler_programs']['postgame'] += 1
-                    is_filler = True
-                elif 'programming' in title_lower or 'next game' in title_lower or 'no game' in title_lower:
-                    analysis['filler_programs']['idle'] += 1
-                    is_filler = True
-
-            if not is_filler:
-                analysis['total_events'] += 1
-
             # Track for gap detection
             if channel not in channel_programs:
                 channel_programs[channel] = []
@@ -1840,12 +1850,18 @@ def _generate_channel_id(format_template, **kwargs):
     for placeholder, value in replacements.items():
         channel_id = channel_id.replace(placeholder, str(value))
 
-    # Clean up the channel ID (lowercase, remove special chars)
-    channel_id = channel_id.lower()
-    channel_id = channel_id.replace("'", "")
-    # Remove any other problematic characters except alphanumeric, dots, and dashes
+    # Clean up channel ID - conditionally preserve case for PascalCase formats
     import re
-    channel_id = re.sub(r'[^a-z0-9.-]', '', channel_id)
+    channel_id = channel_id.replace("'", "")
+    if '{team_name_pascal}' in format_template or ('{league}' in format_template and '{league_id}' not in format_template):
+        # Allow uppercase letters (for PascalCase channel IDs)
+        channel_id = re.sub(r'[^a-zA-Z0-9.-]+', '', channel_id)
+    else:
+        # Traditional: lowercase only
+        channel_id = channel_id.lower()
+        channel_id = re.sub(r'[^a-z0-9.-]+', '-', channel_id)
+        channel_id = re.sub(r'-+', '-', channel_id)
+        channel_id = channel_id.strip('-')
 
     return channel_id
 
@@ -1882,12 +1898,18 @@ def _extract_template_form_data(form):
         'postgame_description': form.get('postgame_description'),
         'postgame_art_url': form.get('postgame_art_url'),
         'postgame_periods': form.get('postgame_periods'),  # JSON string
+        'postgame_conditional_enabled': 1 if form.get('postgame_conditional_enabled') == 'on' else 0,
+        'postgame_description_final': form.get('postgame_description_final'),
+        'postgame_description_not_final': form.get('postgame_description_not_final'),
 
         'idle_enabled': 1 if form.get('idle_enabled') == 'on' else 0,
         'idle_title': form.get('idle_title'),
         'idle_subtitle': form.get('idle_subtitle'),
         'idle_description': form.get('idle_description'),
         'idle_art_url': form.get('idle_art_url'),
+        'idle_conditional_enabled': 1 if form.get('idle_conditional_enabled') == 'on' else 0,
+        'idle_description_final': form.get('idle_description_final'),
+        'idle_description_not_final': form.get('idle_description_not_final'),
 
         # Conditional descriptions
         'description_options': form.get('description_options')  # JSON string

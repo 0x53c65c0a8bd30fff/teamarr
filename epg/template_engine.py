@@ -235,6 +235,9 @@ class TemplateEngine:
                 variables['game_day'] = game_datetime.strftime('%A')
                 variables['game_day_short'] = game_datetime.strftime('%a')
 
+                # Today vs Tonight based on 5pm cutoff in user's timezone
+                variables['today_tonight'] = 'tonight' if local_datetime.hour >= 17 else 'today'
+
                 # Time until game
                 now = datetime.now(game_datetime.tzinfo)
                 time_diff = game_datetime - now
