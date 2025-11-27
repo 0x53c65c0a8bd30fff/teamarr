@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS templates (
     program_art_url TEXT,                             -- Optional URL template for program art (e.g., game-thumbs integration)
 
     -- Game Timing
-    game_duration_mode TEXT DEFAULT 'default', -- 'default', 'sport', or 'custom'
+    game_duration_mode TEXT DEFAULT 'sport', -- 'sport', 'default', or 'custom'
     game_duration_override REAL,          -- Custom override value (only used if mode='custom')
 
     -- XMLTV Flags

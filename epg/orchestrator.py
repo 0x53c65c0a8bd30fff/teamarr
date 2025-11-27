@@ -2096,16 +2096,16 @@ class EPGOrchestrator:
         Returns:
             Game duration in hours
         """
-        mode = team.get('game_duration_mode', 'default')
+        mode = team.get('game_duration_mode', 'sport')
 
         if mode == 'custom':
             # Use custom override from template
             return float(team.get('game_duration_override', 4.0))
-        elif mode == 'sport':
+        elif mode == 'default':
+            # Use global default from settings
+            return float(settings.get('game_duration_default', 4.0))
+        else:  # mode == 'sport' (default)
             # Use sport-specific value from settings
             sport = team.get('sport', 'basketball').lower()
             sport_key = f'game_duration_{sport}'
             return float(settings.get(sport_key, settings.get('game_duration_default', 4.0)))
-        else:  # mode == 'default'
-            # Use global default from settings
-            return float(settings.get('game_duration_default', 4.0))

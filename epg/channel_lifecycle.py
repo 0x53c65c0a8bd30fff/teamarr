@@ -194,27 +194,48 @@ def should_create_channel(
         return False, f"Error: {e}"
 
 
-def get_sport_duration_hours(sport: str) -> float:
+def get_sport_duration_hours(sport: str, settings: dict = None) -> float:
     """
     Get typical duration for a sport in hours.
 
-    These are conservative estimates including potential overtime/extra innings.
+    Uses settings-configured sport durations when available, falling back
+    to hardcoded defaults only when settings are not provided.
+
+    Args:
+        sport: Sport name (e.g., 'football', 'basketball')
+        settings: Optional settings dict with game_duration_{sport} values
+
+    Returns:
+        Duration in hours
     """
-    durations = {
+    sport_lower = sport.lower() if sport else ''
+
+    # Try to get from settings first
+    if settings:
+        sport_key = f'game_duration_{sport_lower}'
+        if sport_key in settings:
+            return float(settings[sport_key])
+        # Fall back to global default from settings
+        if 'game_duration_default' in settings:
+            return float(settings['game_duration_default'])
+
+    # Hardcoded fallbacks (only used when settings not available)
+    fallback_durations = {
         'football': 4.0,      # NFL/CFB games ~3-3.5 hours + buffer
         'basketball': 3.0,    # NBA/CBB games ~2-2.5 hours + buffer
         'hockey': 3.0,        # NHL games ~2.5 hours + buffer
         'baseball': 4.0,      # MLB games can go long with extra innings
         'soccer': 2.5,        # 90 min + halftime + stoppage + buffer
     }
-    return durations.get(sport.lower(), 3.5)  # Default 3.5 hours
+    return fallback_durations.get(sport_lower, 3.5)  # Default 3.5 hours
 
 
 def calculate_delete_time(
     event: Dict,
     delete_timing: str,
     timezone: str,
-    sport: str = None
+    sport: str = None,
+    settings: dict = None
 ) -> Optional[datetime]:
     """
     Calculate when a channel should be deleted based on event and timing setting.
@@ -230,6 +251,7 @@ def calculate_delete_time(
         delete_timing: One of 'stream_removed', 'same_day', 'day_after', '2_days_after', 'manual'
         timezone: Timezone for date calculation
         sport: Sport type for duration calculation (e.g., 'basketball', 'football')
+        settings: Optional settings dict with game_duration_{sport} values
 
     Returns:
         Datetime when channel should be deleted (at 23:59), or None for 'manual'/'stream_removed'
@@ -255,8 +277,8 @@ def calculate_delete_time(
         event_start = event_dt.astimezone(tz)
         event_start_date = event_start.date()
 
-        # Calculate event end time based on sport duration
-        duration_hours = get_sport_duration_hours(sport) if sport else 3.5
+        # Calculate event end time based on sport duration (uses settings if available)
+        duration_hours = get_sport_duration_hours(sport, settings) if sport else 3.5
         event_end = event_start + timedelta(hours=duration_hours)
         event_end_date = event_end.date()
 
@@ -310,7 +332,8 @@ class ChannelLifecycleManager:
         dispatcharr_username: str,
         dispatcharr_password: str,
         timezone: str,
-        epg_data_id: int = None
+        epg_data_id: int = None,
+        settings: dict = None
     ):
         """
         Initialize the lifecycle manager.
@@ -321,6 +344,7 @@ class ChannelLifecycleManager:
             dispatcharr_password: Dispatcharr password
             epg_data_id: Teamarr's EPG source ID in Dispatcharr (for direct EPG injection)
             timezone: Default timezone for date calculations
+            settings: Full settings dict for sport durations and other config
         """
         from api.dispatcharr_client import ChannelManager
 
@@ -331,6 +355,7 @@ class ChannelLifecycleManager:
         )
         self.epg_data_id = epg_data_id
         self.timezone = timezone
+        self.settings = settings or {}
 
     def delete_managed_channel(
         self,
@@ -535,7 +560,7 @@ class ChannelLifecycleManager:
                         logger.warning(f"Failed to upload logo for '{channel_name}': {logo_result.get('error')}")
 
             # Calculate scheduled delete time
-            delete_at = calculate_delete_time(event, delete_timing, self.timezone, sport)
+            delete_at = calculate_delete_time(event, delete_timing, self.timezone, sport, self.settings)
 
             # Generate tvg_id for channel-EPG association
             # This must match the channel id in the generated XMLTV
@@ -816,7 +841,7 @@ class ChannelLifecycleManager:
                 continue
 
             # Recalculate scheduled delete time
-            new_delete_at = calculate_delete_time(event, delete_timing, self.timezone, sport)
+            new_delete_at = calculate_delete_time(event, delete_timing, self.timezone, sport, self.settings)
             old_delete_at = existing.get('scheduled_delete_at')
 
             # Convert old_delete_at to compare (may be string from DB)
@@ -934,7 +959,7 @@ class ChannelLifecycleManager:
                     continue
 
                 # Recalculate scheduled delete time
-                new_delete_at = calculate_delete_time(event, delete_timing, self.timezone, sport)
+                new_delete_at = calculate_delete_time(event, delete_timing, self.timezone, sport, self.settings)
                 old_delete_at = channel.get('scheduled_delete_at')
 
                 old_delete_str = old_delete_at if old_delete_at else None
@@ -1186,5 +1211,6 @@ def get_lifecycle_manager() -> Optional[ChannelLifecycleManager]:
     return ChannelLifecycleManager(
         url, username, password,
         timezone=timezone,
-        epg_data_id=epg_data_id
+        epg_data_id=epg_data_id,
+        settings=settings
     )

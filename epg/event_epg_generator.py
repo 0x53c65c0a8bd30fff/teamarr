@@ -60,11 +60,10 @@ class EventEPGGenerator:
         """
         Get event duration based on template mode and settings.
 
-        Uses the same duration settings as team-based EPG:
-        - Template custom override (if mode='custom')
-        - Sport-specific setting (game_duration_{sport})
-        - Global default (game_duration_default)
-        - Fallback constants
+        Respects the same duration modes as team-based EPG:
+        - 'custom': Use template's custom override value
+        - 'sport': Use sport-specific setting from settings
+        - 'default': Use global default from settings
 
         Args:
             group_info: Event group with assigned_sport
@@ -77,21 +76,30 @@ class EventEPGGenerator:
         settings = settings or {}
         sport = group_info.get('assigned_sport', 'football').lower()
 
-        # Check for template custom override first
+        # Get duration mode from template (default to 'sport' for event templates)
+        duration_mode = 'sport'
         if template:
-            duration_mode = template.get('game_duration_mode', 'default')
-            if duration_mode == 'custom' and template.get('game_duration_override'):
-                # Template override is in minutes, convert to hours
-                return float(template['game_duration_override']) / 60.0
+            duration_mode = template.get('game_duration_mode', 'sport')
 
-        # Use sport-specific setting from settings (same keys as team EPG)
-        sport_key = f'game_duration_{sport}'
-        if sport_key in settings:
-            return float(settings[sport_key])
+        if duration_mode == 'custom':
+            # Use custom override from template (value is in hours)
+            if template and template.get('game_duration_override'):
+                return float(template['game_duration_override'])
+            # Fall back to sport-specific if no override value
+            duration_mode = 'sport'
 
-        # Fall back to global default from settings
-        if 'game_duration_default' in settings:
-            return float(settings['game_duration_default'])
+        if duration_mode == 'sport':
+            # Use sport-specific setting from settings
+            sport_key = f'game_duration_{sport}'
+            if sport_key in settings:
+                return float(settings[sport_key])
+            # Fall back to global default
+            if 'game_duration_default' in settings:
+                return float(settings['game_duration_default'])
+        elif duration_mode == 'default':
+            # Use global default from settings
+            if 'game_duration_default' in settings:
+                return float(settings['game_duration_default'])
 
         # Final fallback to hardcoded values
         return self.FALLBACK_DURATIONS.get(sport, 3.0)

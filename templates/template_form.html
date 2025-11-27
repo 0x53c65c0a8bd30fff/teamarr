@@ -746,16 +746,16 @@
                             <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem;">Global and Per-Sport Defaults can be changed in Settings</p>
                             <div style="display: flex; flex-direction: column; gap: 0.5rem;">
                                 <label style="display: flex; align-items: center; gap: 0.5rem;">
-                                    <input type="radio" name="game_duration_mode" value="default"
-                                           {% if not template or template.game_duration_mode == 'default' %}checked{% endif %}
-                                           onchange="updateGameDurationMode()">
-                                    <span>Use Global Default</span>
-                                </label>
-                                <label style="display: flex; align-items: center; gap: 0.5rem;">
                                     <input type="radio" name="game_duration_mode" value="sport"
-                                           {% if template and template.game_duration_mode == 'sport' %}checked{% endif %}
+                                           {% if not template or not template.game_duration_mode or template.game_duration_mode == 'sport' %}checked{% endif %}
                                            onchange="updateGameDurationMode()">
                                     <span>Use Per-Sport Default</span>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <input type="radio" name="game_duration_mode" value="default"
+                                           {% if template and template.game_duration_mode == 'default' %}checked{% endif %}
+                                           onchange="updateGameDurationMode()">
+                                    <span>Use Global Default</span>
                                 </label>
                                 <label style="display: flex; align-items: center; gap: 0.5rem;">
                                     <input type="radio" name="game_duration_mode" value="custom"
