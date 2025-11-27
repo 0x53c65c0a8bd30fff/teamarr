@@ -600,6 +600,34 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
                     sync_conn.close()
                     dispatcharr_refreshed = True
                     app.logger.info("✅ Dispatcharr EPG refresh initiated successfully")
+
+                    # ============================================
+                    # PHASE 6: Associate EPG with Managed Channels
+                    # ============================================
+                    # This must happen AFTER Dispatcharr refresh creates EPGData records
+                    # Pattern: Look up EPGData by tvg_id, call set_channel_epg()
+                    report_progress('progress', 'Associating EPG with managed channels...', 99)
+                    try:
+                        # Give Dispatcharr a moment to process the EPG data
+                        import time
+                        time.sleep(2)
+
+                        lifecycle_mgr = get_lifecycle_manager()
+                        if lifecycle_mgr:
+                            assoc_results = lifecycle_mgr.associate_epg_with_channels()
+                            assoc_count = len(assoc_results.get('associated', []))
+                            skip_count = len(assoc_results.get('skipped', []))
+                            error_count = len(assoc_results.get('errors', []))
+
+                            if assoc_count > 0:
+                                app.logger.info(f"🔗 Associated EPG with {assoc_count} managed channels")
+                            if skip_count > 0:
+                                app.logger.debug(f"   Skipped {skip_count} channels (no matching EPGData yet)")
+                            if error_count > 0:
+                                app.logger.warning(f"   Failed to associate {error_count} channels")
+                    except Exception as e:
+                        app.logger.warning(f"EPG association error: {e}")
+
                 else:
                     app.logger.warning(f"⚠️ Dispatcharr refresh failed: {refresh_result.get('message')}")
             except Exception as e:

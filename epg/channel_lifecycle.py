@@ -4,8 +4,12 @@ Channel Lifecycle Manager for Event-based EPG
 Handles automatic channel creation and deletion in Dispatcharr
 based on matched streams and lifecycle settings.
 
-EPG is injected directly via Dispatcharr's set-epg API, so tvg_id matching
-is not needed for managed channels.
+EPG Association Flow (matching Dispatcharr's internal pattern):
+1. Generate consistent tvg_id: teamarr-event-{espn_event_id}
+2. Create channel in Dispatcharr with this tvg_id
+3. Generate XMLTV with matching channel id
+4. After EPG refresh, look up EPGData by tvg_id
+5. Call set_channel_epg(channel_id, epg_data_id) to associate
 """
 
 import logging
@@ -14,6 +18,24 @@ from typing import List, Dict, Any, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
+
+
+def generate_event_tvg_id(espn_event_id: str) -> str:
+    """
+    Generate consistent tvg_id for an event.
+
+    This tvg_id is used:
+    1. In XMLTV <channel id="..."> and <programme channel="...">
+    2. When creating channels in Dispatcharr
+    3. To look up EPGData for channel-EPG association
+
+    Args:
+        espn_event_id: ESPN event ID (e.g., "401547679")
+
+    Returns:
+        Formatted tvg_id (e.g., "teamarr-event-401547679")
+    """
+    return f"teamarr-event-{espn_event_id}"
 
 
 def get_global_lifecycle_settings() -> Dict[str, str]:
@@ -433,11 +455,16 @@ class ChannelLifecycleManager:
             # Calculate scheduled delete time
             delete_at = calculate_delete_time(event, delete_timing, self.timezone, sport)
 
-            # Create channel in Dispatcharr
+            # Generate tvg_id for channel-EPG association
+            # This must match the channel id in the generated XMLTV
+            tvg_id = generate_event_tvg_id(espn_event_id)
+
+            # Create channel in Dispatcharr with tvg_id
             create_result = self.channel_api.create_channel(
                 name=channel_name,
                 channel_number=channel_number,
                 stream_ids=[stream['id']],
+                tvg_id=tvg_id,
                 channel_group_id=channel_group_id,
                 logo_id=logo_id
             )
@@ -452,17 +479,8 @@ class ChannelLifecycleManager:
             dispatcharr_channel = create_result['channel']
             dispatcharr_channel_id = dispatcharr_channel['id']
 
-            # Inject EPG directly via set-epg API
-            if self.epg_data_id:
-                epg_result = self.channel_api.set_channel_epg(
-                    dispatcharr_channel_id,
-                    self.epg_data_id
-                )
-                if not epg_result.get('success'):
-                    logger.warning(
-                        f"Failed to set EPG for channel {dispatcharr_channel_id}: "
-                        f"{epg_result.get('error')}"
-                    )
+            # Note: EPG association happens AFTER EPG refresh in Dispatcharr
+            # See associate_epg_with_channels() method
 
             # Track in database
             try:
@@ -478,6 +496,7 @@ class ChannelLifecycleManager:
                     dispatcharr_stream_id=stream['id'],
                     channel_number=channel_number,
                     channel_name=channel_name,
+                    tvg_id=tvg_id,  # For EPG association after refresh
                     espn_event_id=espn_event_id,
                     event_date=event_date,
                     home_team=home_team,
@@ -830,6 +849,125 @@ class ChannelLifecycleManager:
 
         if results['updated']:
             logger.info(f"Synced delete times for {len(results['updated'])} channels with group settings")
+
+        return results
+
+    def associate_epg_with_channels(
+        self,
+        group_id: int = None
+    ) -> Dict[str, Any]:
+        """
+        Associate EPG data with managed channels after EPG refresh.
+
+        This implements Dispatcharr's pattern:
+        1. Look up EPGData by tvg_id (filtered by EPG source)
+        2. Call set_channel_epg(channel_id, epg_data_id)
+
+        Should be called AFTER EPG is refreshed in Dispatcharr.
+
+        Args:
+            group_id: Optional group ID to filter channels (None = all groups)
+
+        Returns:
+            Dict with 'associated', 'skipped', 'errors' lists
+        """
+        results = {
+            'associated': [],
+            'skipped': [],
+            'errors': []
+        }
+
+        # Get managed channels
+        from database import get_managed_channels_for_group, update_managed_channel, get_connection
+
+        if group_id:
+            channels = get_managed_channels_for_group(group_id)
+        else:
+            # Get all active managed channels
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM managed_channels WHERE deleted_at IS NULL"
+            )
+            channels = [dict(row) for row in cursor.fetchall()]
+
+        if not channels:
+            logger.debug("No managed channels to associate EPG with")
+            return results
+
+        # Get EPG source ID from settings
+        if not self.epg_data_id:
+            logger.warning("No EPG source configured - cannot associate EPG")
+            return results
+
+        logger.info(f"Associating EPG with {len(channels)} managed channels...")
+
+        for channel in channels:
+            tvg_id = channel.get('tvg_id')
+            dispatcharr_channel_id = channel.get('dispatcharr_channel_id')
+            channel_name = channel.get('channel_name', f"Channel {dispatcharr_channel_id}")
+
+            if not tvg_id:
+                # Generate tvg_id from ESPN event ID for legacy channels
+                espn_event_id = channel.get('espn_event_id')
+                if espn_event_id:
+                    tvg_id = generate_event_tvg_id(espn_event_id)
+                    # Update the channel record with the tvg_id
+                    update_managed_channel(channel['id'], {'tvg_id': tvg_id})
+                else:
+                    results['skipped'].append({
+                        'channel_name': channel_name,
+                        'reason': 'No tvg_id or espn_event_id'
+                    })
+                    continue
+
+            # Look up EPGData by tvg_id in the Teamarr EPG source
+            epg_data = self.channel_api.find_epg_data_by_tvg_id(
+                tvg_id,
+                epg_source_id=self.epg_data_id
+            )
+
+            if not epg_data:
+                results['skipped'].append({
+                    'channel_name': channel_name,
+                    'tvg_id': tvg_id,
+                    'reason': f'EPGData not found for tvg_id={tvg_id}'
+                })
+                continue
+
+            # Associate EPG with channel
+            epg_data_id = epg_data['id']
+            epg_result = self.channel_api.set_channel_epg(
+                dispatcharr_channel_id,
+                epg_data_id
+            )
+
+            if epg_result.get('success'):
+                results['associated'].append({
+                    'channel_name': channel_name,
+                    'dispatcharr_channel_id': dispatcharr_channel_id,
+                    'tvg_id': tvg_id,
+                    'epg_data_id': epg_data_id
+                })
+                logger.debug(f"Associated EPG with channel '{channel_name}' (epg_data_id={epg_data_id})")
+            else:
+                results['errors'].append({
+                    'channel_name': channel_name,
+                    'tvg_id': tvg_id,
+                    'error': epg_result.get('error', 'Unknown error')
+                })
+                logger.warning(
+                    f"Failed to associate EPG with channel '{channel_name}': "
+                    f"{epg_result.get('error')}"
+                )
+
+        # Summary logging
+        if results['associated']:
+            logger.info(f"Associated EPG with {len(results['associated'])} channels")
+        if results['skipped']:
+            logger.debug(f"Skipped {len(results['skipped'])} channels (no matching EPGData)")
+        if results['errors']:
+            logger.warning(f"Failed to associate {len(results['errors'])} channels")
 
         return results
 

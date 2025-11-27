@@ -950,6 +950,80 @@ class ChannelManager:
 
         return {"success": False, "error": str(error_msg)}
 
+    def get_epg_data_list(self, epg_source_id: int = None) -> List[Dict]:
+        """
+        Get all EPGData entries from Dispatcharr.
+
+        EPGData represents individual channel entries within an EPG source.
+        Each entry has a tvg_id that can be used to match channels.
+
+        Args:
+            epg_source_id: Optional filter by EPG source ID
+
+        Returns:
+            List of EPGData dicts with id, tvg_id, name, icon_url, epg_source
+        """
+        all_epg_data = []
+        next_page = "/api/epg/epgdata/?page_size=500"
+
+        while next_page:
+            response = self.auth.get(next_page)
+            if not response or response.status_code != 200:
+                logger.error(f"Failed to get EPG data: {response.status_code if response else 'No response'}")
+                break
+
+            data = response.json()
+
+            if isinstance(data, dict) and 'results' in data:
+                all_epg_data.extend(data['results'])
+                next_url = data.get('next')
+                if next_url:
+                    from urllib.parse import urlparse
+                    parsed = urlparse(next_url)
+                    next_page = f"{parsed.path}?{parsed.query}" if parsed.query else parsed.path
+                else:
+                    next_page = None
+            elif isinstance(data, list):
+                all_epg_data.extend(data)
+                next_page = None
+            else:
+                next_page = None
+
+        # Filter by epg_source_id if specified
+        if epg_source_id is not None:
+            all_epg_data = [
+                e for e in all_epg_data
+                if e.get('epg_source') == epg_source_id
+            ]
+
+        return all_epg_data
+
+    def find_epg_data_by_tvg_id(
+        self,
+        tvg_id: str,
+        epg_source_id: int = None
+    ) -> Optional[Dict]:
+        """
+        Find EPGData by tvg_id, optionally filtered by EPG source.
+
+        This mimics Dispatcharr's internal EPG matching logic:
+        epg_data = EPGData.objects.filter(tvg_id=tvg_id, epg_source=epg_source).first()
+
+        Args:
+            tvg_id: The tvg_id to search for (e.g., "teamarr-event-401547679")
+            epg_source_id: Optional EPG source ID to filter by
+
+        Returns:
+            EPGData dict if found, None otherwise
+        """
+        epg_data_list = self.get_epg_data_list(epg_source_id)
+
+        for epg_data in epg_data_list:
+            if epg_data.get('tvg_id') == tvg_id:
+                return epg_data
+
+        return None
+
     def upload_logo(self, name: str, url: str) -> Dict[str, Any]:
         """
         Upload a logo to Dispatcharr.

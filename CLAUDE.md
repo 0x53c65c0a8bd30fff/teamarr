@@ -137,6 +137,34 @@ python3 app.py
 - UI displays converted to user's local date/time
 - Fixes issue where UTC date differed from local date
 
+### Completed: Phase 11 (EPG-Channel Association)
+
+**Problem Solved:**
+- Managed channels were not getting associated with correct EPG entries
+- Previous approach tried to use EPG Source ID instead of EPG Data ID
+
+**Solution (Matches Dispatcharr's Internal Pattern):**
+1. Generate consistent `tvg_id`: `teamarr-event-{espn_event_id}`
+2. Use same tvg_id in XMLTV `<channel id="...">` and when creating channels
+3. After EPG refresh, look up `EPGData` by tvg_id
+4. Call `set_channel_epg(channel_id, epg_data_id)` with correct EPGData ID
+
+**Key Changes:**
+- `event_epg_generator.py`: `_get_channel_id()` now uses `teamarr-event-{espn_event_id}`
+- `channel_lifecycle.py`: Added `generate_event_tvg_id()` helper
+- `channel_lifecycle.py`: Added `associate_epg_with_channels()` method
+- `dispatcharr_client.py`: Added `get_epg_data_list()` and `find_epg_data_by_tvg_id()`
+- `app.py`: Added Phase 6 to `generate_all_epg()` for EPG association
+
+**EPG Association Flow:**
+```
+1. Generate XMLTV with channel id="teamarr-event-{espn_event_id}"
+2. Create channel in Dispatcharr with tvg_id="teamarr-event-{espn_event_id}"
+3. Refresh EPG in Dispatcharr → Creates EPGData records
+4. Look up EPGData by tvg_id (filtered by EPG source)
+5. Call set_channel_epg(channel_id, epg_data_id)
+```
+
 ---
 
 ## Settings Page Organization
@@ -170,11 +198,13 @@ The settings page is organized into logical sections:
 ### `epg/channel_lifecycle.py`
 Channel lifecycle management module:
 - `ChannelLifecycleManager` - coordinates channel creation/deletion with Dispatcharr
+- `generate_event_tvg_id(espn_event_id)` - generates consistent tvg_id format
 - `should_create_channel(event, timing, timezone)` - checks if channel should be created
 - `calculate_delete_time(event, timing, timezone, sport)` - calculates deletion schedule
 - `get_sport_duration_hours(sport)` - returns typical duration
 - `generate_channel_name(event, template, timezone)` - generates channel name from template
 - `sync_group_settings(group)` - updates ALL channels when group settings change
+- `associate_epg_with_channels(group_id)` - links channels to EPGData after refresh
 - `start_lifecycle_scheduler()` / `stop_lifecycle_scheduler()` - background scheduler
 
 ### `epg/epg_consolidator.py`
@@ -252,13 +282,14 @@ CREATE TABLE managed_channels (
 1. **Event templates** use a single description field (not multi-fallback like team templates)
 2. **Event matching** skips completed games - EPG is for upcoming/live events only
 3. **EPG consolidation** merges all sources into a single XML file
-4. **Direct EPG injection** via `set_channel_epg()` API - no tvg_id matching needed
-5. **Timezone sensitivity** - all lifecycle timing uses user's configured timezone
-6. **Channel creation flow**: Generate EPG first, then create channels and inject EPG
-7. **Sport-specific durations** for calculating event end times (handles midnight crossings)
-8. **Settings sync on every EPG generation** - ensures setting changes take effect immediately
-9. **UTC storage, local display** - all dates stored as UTC, converted for display
-10. **Relative output paths** - `./data/teamarr.xml` works in both Docker and local dev
+4. **EPG-Channel association** uses Dispatcharr's internal pattern: tvg_id lookup → set_channel_epg()
+5. **Consistent tvg_id format**: `teamarr-event-{espn_event_id}` used in XMLTV and channel creation
+6. **Timezone sensitivity** - all lifecycle timing uses user's configured timezone
+7. **Channel creation flow**: Create channels with tvg_id, generate EPG, refresh Dispatcharr, associate EPG
+8. **Sport-specific durations** for calculating event end times (handles midnight crossings)
+9. **Settings sync on every EPG generation** - ensures setting changes take effect immediately
+10. **UTC storage, local display** - all dates stored as UTC, converted for display
+11. **Relative output paths** - `./data/teamarr.xml` works in both Docker and local dev
 
 ## Lifecycle Timing Options
 
@@ -297,12 +328,15 @@ generate_all_epg(progress_callback, team_progress_callback, settings, save_histo
 ├── Phase 2: Event-based EPG
 │   └── For each enabled event group with template:
 │       └── refresh_event_group_core() → events.xml via consolidator
+│       └── Creates channels with tvg_id=teamarr-event-{espn_event_id}
 ├── Phase 3: Channel Lifecycle
 │   └── get_lifecycle_manager().process_scheduled_deletions()
 ├── Phase 4: History & Stats
 │   └── save_epg_generation_stats() → epg_history table
-└── Phase 5: Dispatcharr Refresh
-    └── EPGManager.refresh() if configured
+├── Phase 5: Dispatcharr Refresh
+│   └── EPGManager.refresh() → Creates EPGData records from XMLTV
+└── Phase 6: EPG Association (after Dispatcharr refresh)
+    └── associate_epg_with_channels() → Links channels to EPGData by tvg_id
 ```
 
 **Entry Points (all use `generate_all_epg()`):**
@@ -327,6 +361,7 @@ Dashboard → Templates → Teams → Events → EPG → Channels → Settings
 ---
 
 ## What's Next
+- Alpha testing release
 - Better UI feedback for stream matching issues
 - More event template variables (venue, broadcast network)
 - Documentation/help text in UI

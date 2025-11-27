@@ -129,7 +129,7 @@ class EventEPGGenerator:
             stream = matched['stream']
             event = matched['event']
 
-            channel_id = self._get_channel_id(stream)
+            channel_id = self._get_channel_id(stream, event)
 
             # Add channel if not already added
             if channel_id not in added_channels:
@@ -153,9 +153,21 @@ class EventEPGGenerator:
 
         return xml_with_doctype
 
-    def _get_channel_id(self, stream: Dict) -> str:
-        """Generate consistent channel ID for a stream."""
-        # Use Dispatcharr's tvg_id if available, otherwise stream ID
+    def _get_channel_id(self, stream: Dict, event: Dict = None) -> str:
+        """
+        Generate consistent channel ID (tvg_id) for an event stream.
+
+        Uses ESPN event ID for consistency across EPG generation and channel creation.
+        Format: teamarr-event-{espn_event_id}
+
+        This tvg_id is used:
+        1. In XMLTV <channel id="..."> and <programme channel="...">
+        2. When creating channels in Dispatcharr
+        3. To look up EPGData for channel-EPG association
+        """
+        if event and event.get('id'):
+            return f"teamarr-event-{event['id']}"
+        # Fallback for edge cases (shouldn't happen in normal flow)
         return stream.get('tvg_id') or f"event-{stream.get('id', 'unknown')}"
 
     def _add_channel(
@@ -171,7 +183,7 @@ class EventEPGGenerator:
         import xml.etree.ElementTree as ET
 
         channel = ET.SubElement(parent, 'channel')
-        channel.set('id', self._get_channel_id(stream))
+        channel.set('id', self._get_channel_id(stream, event))
 
         # Display name - use template channel_name if available, else stream name
         display_name = ET.SubElement(channel, 'display-name')
@@ -220,7 +232,7 @@ class EventEPGGenerator:
         programme = ET.SubElement(parent, 'programme')
         programme.set('start', start_time)
         programme.set('stop', stop_time)
-        programme.set('channel', self._get_channel_id(stream))
+        programme.set('channel', self._get_channel_id(stream, event))
 
         # Build template context for variable resolution
         epg_timezone = settings.get('epg_timezone', 'America/Detroit')
@@ -338,7 +350,7 @@ class EventEPGGenerator:
         programme = ET.SubElement(parent, 'programme')
         programme.set('start', start_time)
         programme.set('stop', stop_time)
-        programme.set('channel', self._get_channel_id(stream))
+        programme.set('channel', self._get_channel_id(stream, event))
 
         # Build template context for variable resolution
         template_ctx = build_event_context(event, stream, group_info, epg_timezone, settings)
@@ -411,7 +423,7 @@ class EventEPGGenerator:
         programme = ET.SubElement(parent, 'programme')
         programme.set('start', start_time)
         programme.set('stop', stop_time)
-        programme.set('channel', self._get_channel_id(stream))
+        programme.set('channel', self._get_channel_id(stream, event))
 
         # Build template context for variable resolution
         template_ctx = build_event_context(event, stream, group_info, epg_timezone, settings)

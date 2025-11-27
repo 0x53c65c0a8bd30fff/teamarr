@@ -293,7 +293,13 @@ class EventTemplateEngine:
 
         variables['stream_name'] = stream.get('name', '')
         variables['stream_id'] = str(stream.get('id', ''))
-        variables['channel_id'] = stream.get('tvg_id') or f"event-{stream.get('id', 'unknown')}"
+
+        # Channel ID (tvg_id) - use ESPN event ID for consistency with channel creation
+        # Format: teamarr-event-{espn_event_id}
+        if event.get('id'):
+            variables['channel_id'] = f"teamarr-event-{event['id']}"
+        else:
+            variables['channel_id'] = stream.get('tvg_id') or f"event-{stream.get('id', 'unknown')}"
 
         return variables
 
