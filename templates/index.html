@@ -48,10 +48,10 @@
             </div>
         </div>
 
-        <!-- Events Quadrant -->
+        <!-- Event Groups Quadrant -->
         <div class="quadrant">
             <div class="quadrant-header">
-                <h3>Events</h3>
+                <h3>Event Groups</h3>
                 <a href="{{ url_for('event_groups_list') }}" class="manage-link">Manage →</a>
             </div>
             <div class="quadrant-tiles">
@@ -61,7 +61,7 @@
                 </div>
                 <div class="tile">
                     <div class="tile-value">{{ enabled_event_group_count }}</div>
-                    <div class="tile-label">Enabled</div>
+                    <div class="tile-label">Active</div>
                 </div>
                 <div class="tile">
                     <div class="tile-value">{{ total_event_streams }}</div>
@@ -95,7 +95,7 @@
                 </div>
                 <div class="tile">
                     <div class="tile-value">{{ epg_stats.total_programmes }}</div>
-                    <div class="tile-label">Programs</div>
+                    <div class="tile-label">Total</div>
                 </div>
             </div>
         </div>
@@ -112,16 +112,16 @@
                     <div class="tile-label">Active</div>
                 </div>
                 <div class="tile">
-                    <div class="tile-value">{{ pending_delete_count }}</div>
-                    <div class="tile-label">Pending</div>
+                    <div class="tile-value">{{ channels_with_logos }}</div>
+                    <div class="tile-label">Logos</div>
                 </div>
                 <div class="tile">
-                    <div class="tile-value">{{ groups_with_channels }}</div>
+                    <div class="tile-value">{{ dispatcharr_groups_count }}</div>
                     <div class="tile-label">Groups</div>
                 </div>
                 <div class="tile">
-                    <div class="tile-value">{{ deleted_channel_count }}</div>
-                    <div class="tile-label">Deleted</div>
+                    <div class="tile-value">{{ recently_deleted_count }}</div>
+                    <div class="tile-label">Deleted 24h</div>
                 </div>
             </div>
         </div>

@@ -882,15 +882,21 @@ def index():
 
     # Get managed channel stats
     managed_channel_count = cursor.execute("SELECT COUNT(*) FROM managed_channels WHERE deleted_at IS NULL").fetchone()[0]
-    pending_delete_count = cursor.execute("""
+    channels_with_logos = cursor.execute("""
         SELECT COUNT(*) FROM managed_channels
-        WHERE deleted_at IS NULL AND scheduled_delete_at IS NOT NULL AND scheduled_delete_at > datetime('now')
+        WHERE deleted_at IS NULL AND dispatcharr_logo_id IS NOT NULL
     """).fetchone()[0]
-    deleted_channel_count = cursor.execute("SELECT COUNT(*) FROM managed_channels WHERE deleted_at IS NOT NULL").fetchone()[0]
+    recently_deleted_count = cursor.execute("""
+        SELECT COUNT(*) FROM managed_channels
+        WHERE deleted_at IS NOT NULL AND deleted_at >= datetime('now', '-24 hours')
+    """).fetchone()[0]
 
-    # Get distinct groups with channels
-    groups_with_channels = cursor.execute("""
-        SELECT COUNT(DISTINCT event_epg_group_id) FROM managed_channels WHERE deleted_at IS NULL
+    # Get distinct Dispatcharr channel groups with active channels
+    dispatcharr_groups_count = cursor.execute("""
+        SELECT COUNT(DISTINCT eg.channel_group_id)
+        FROM managed_channels mc
+        JOIN event_epg_groups eg ON mc.event_epg_group_id = eg.id
+        WHERE mc.deleted_at IS NULL AND eg.channel_group_id IS NOT NULL
     """).fetchone()[0]
 
     # Get timezone from settings
@@ -967,9 +973,9 @@ def index():
         total_event_streams=total_event_streams,
         matched_event_streams=matched_event_streams,
         managed_channel_count=managed_channel_count,
-        pending_delete_count=pending_delete_count,
-        deleted_channel_count=deleted_channel_count,
-        groups_with_channels=groups_with_channels,
+        channels_with_logos=channels_with_logos,
+        dispatcharr_groups_count=dispatcharr_groups_count,
+        recently_deleted_count=recently_deleted_count,
         latest_epg=latest_epg,
         epg_history=epg_history_formatted,
         epg_stats=epg_stats  # Single source of truth for EPG stats
