@@ -33,6 +33,7 @@ from epg.orchestrator import EPGOrchestrator
 from epg.xmltv_generator import XMLTVGenerator
 from utils.logger import setup_logging, get_logger
 from utils import to_pascal_case
+from utils.time_format import format_time as fmt_time, get_time_settings
 from config import VERSION
 
 app = Flask(__name__)
@@ -2108,27 +2109,19 @@ def api_variables():
                         utc_dt = dt(2025, 1, 15, hour, minute, 0, tzinfo=timezone.utc)
                         # Convert to user's timezone
                         local_dt = utc_dt.astimezone(user_tz)
-                        local_tz_abbrev = local_dt.strftime('%Z')
 
-                        # Format based on variable type
+                        # Format based on variable type using centralized time utilities
                         if var['format'] == 'time_with_tz':
                             # Main game_time variable - honor user's time_format and show_timezone settings
-                            if user_time_format == '24h':
-                                time_str = local_dt.strftime('%H:%M')
-                            else:
-                                time_str = local_dt.strftime('%I:%M %p').lstrip('0')
-                            if user_show_tz:
-                                converted_examples[sport] = f"{time_str} {local_tz_abbrev}"
-                            else:
-                                converted_examples[sport] = time_str
+                            converted_examples[sport] = fmt_time(local_dt, user_time_format, user_show_tz)
                         elif var['format'] == 'time_12h':
                             # Explicit 12h format - always 12h, never show timezone
-                            converted_examples[sport] = local_dt.strftime('%I:%M %p').lstrip('0')
+                            converted_examples[sport] = fmt_time(local_dt, '12h', False)
                         elif var['format'] == 'time_24h':
                             # Explicit 24h format - always 24h, never show timezone
-                            converted_examples[sport] = local_dt.strftime('%H:%M')
+                            converted_examples[sport] = fmt_time(local_dt, '24h', False)
                         else:
-                            converted_examples[sport] = local_dt.strftime('%I:%M %p').lstrip('0')
+                            converted_examples[sport] = fmt_time(local_dt, '12h', False)
                     except Exception as e:
                         # Fall back to original example if conversion fails
                         app.logger.warning(f"Time conversion failed for {var.get('name')}/{sport}: {e}")
