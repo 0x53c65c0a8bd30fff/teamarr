@@ -870,6 +870,7 @@ def index():
 
     # Get team stats
     team_count = cursor.execute("SELECT COUNT(*) FROM teams").fetchone()[0]
+    team_league_count = cursor.execute("SELECT COUNT(DISTINCT league) FROM teams WHERE league IS NOT NULL AND league != ''").fetchone()[0]
     active_team_count = cursor.execute("SELECT COUNT(*) FROM teams WHERE active = 1").fetchone()[0]
     assigned_team_count = cursor.execute("SELECT COUNT(*) FROM teams WHERE template_id IS NOT NULL").fetchone()[0]
 
@@ -958,6 +959,7 @@ def index():
         team_template_count=team_template_count,
         event_template_count=event_template_count,
         team_count=team_count,
+        team_league_count=team_league_count,
         active_team_count=active_team_count,
         assigned_team_count=assigned_team_count,
         event_group_count=event_group_count,

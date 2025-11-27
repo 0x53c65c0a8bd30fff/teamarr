@@ -230,12 +230,45 @@ def get_sport_duration_hours(sport: str, settings: dict = None) -> float:
     return fallback_durations.get(sport_lower, 3.5)  # Default 3.5 hours
 
 
+def get_event_duration_hours(sport: str, settings: dict = None, template: dict = None) -> float:
+    """
+    Get event duration based on template mode and settings.
+
+    Priority:
+    1. Template custom override (if mode='custom')
+    2. Sport-specific setting from settings (if mode='sport' or default)
+    3. Global default from settings
+    4. Hardcoded fallbacks
+
+    Args:
+        sport: Sport name (e.g., 'football', 'basketball')
+        settings: Optional settings dict with game_duration_{sport} values
+        template: Optional template dict with game_duration_mode and game_duration_override
+
+    Returns:
+        Duration in hours
+    """
+    # Check template for custom duration
+    if template:
+        duration_mode = template.get('game_duration_mode', 'sport')
+        if duration_mode == 'custom' and template.get('game_duration_override'):
+            return float(template['game_duration_override'])
+        elif duration_mode == 'default':
+            # Use global default from settings
+            if settings and 'game_duration_default' in settings:
+                return float(settings['game_duration_default'])
+
+    # Use sport-specific duration from settings (default behavior)
+    return get_sport_duration_hours(sport, settings)
+
+
 def calculate_delete_time(
     event: Dict,
     delete_timing: str,
     timezone: str,
     sport: str = None,
-    settings: dict = None
+    settings: dict = None,
+    template: dict = None
 ) -> Optional[datetime]:
     """
     Calculate when a channel should be deleted based on event and timing setting.
@@ -252,6 +285,7 @@ def calculate_delete_time(
         timezone: Timezone for date calculation
         sport: Sport type for duration calculation (e.g., 'basketball', 'football')
         settings: Optional settings dict with game_duration_{sport} values
+        template: Optional template dict with game_duration_mode and game_duration_override
 
     Returns:
         Datetime when channel should be deleted (at 23:59), or None for 'manual'/'stream_removed'
@@ -277,8 +311,8 @@ def calculate_delete_time(
         event_start = event_dt.astimezone(tz)
         event_start_date = event_start.date()
 
-        # Calculate event end time based on sport duration (uses settings if available)
-        duration_hours = get_sport_duration_hours(sport, settings) if sport else 3.5
+        # Calculate event end time based on template/settings duration
+        duration_hours = get_event_duration_hours(sport, settings, template) if sport else 3.5
         event_end = event_start + timedelta(hours=duration_hours)
         event_end_date = event_end.date()
 
@@ -559,8 +593,8 @@ class ChannelLifecycleManager:
                     else:
                         logger.warning(f"Failed to upload logo for '{channel_name}': {logo_result.get('error')}")
 
-            # Calculate scheduled delete time
-            delete_at = calculate_delete_time(event, delete_timing, self.timezone, sport, self.settings)
+            # Calculate scheduled delete time (uses template duration if custom)
+            delete_at = calculate_delete_time(event, delete_timing, self.timezone, sport, self.settings, template)
 
             # Generate tvg_id for channel-EPG association
             # This must match the channel id in the generated XMLTV
@@ -812,7 +846,8 @@ class ChannelLifecycleManager:
         """
         from database import (
             get_managed_channel_by_event,
-            update_managed_channel
+            update_managed_channel,
+            get_template
         )
 
         results = {
@@ -824,6 +859,11 @@ class ChannelLifecycleManager:
         global_settings = get_global_lifecycle_settings()
         delete_timing = group.get('channel_delete_timing') or global_settings['channel_delete_timing']
         sport = group.get('assigned_sport')
+
+        # Get template for duration calculation
+        template = None
+        if group.get('event_template_id'):
+            template = get_template(group['event_template_id'])
 
         for matched in matched_streams:
             event = matched['event']
@@ -840,8 +880,8 @@ class ChannelLifecycleManager:
             if existing.get('deleted_at'):
                 continue
 
-            # Recalculate scheduled delete time
-            new_delete_at = calculate_delete_time(event, delete_timing, self.timezone, sport, self.settings)
+            # Recalculate scheduled delete time (uses template duration if custom)
+            new_delete_at = calculate_delete_time(event, delete_timing, self.timezone, sport, self.settings, template)
             old_delete_at = existing.get('scheduled_delete_at')
 
             # Convert old_delete_at to compare (may be string from DB)
@@ -892,7 +932,8 @@ class ChannelLifecycleManager:
         """
         from database import (
             get_managed_channels_for_group,
-            update_managed_channel
+            update_managed_channel,
+            get_template
         )
         from api.espn_client import ESPNClient
 
@@ -906,6 +947,11 @@ class ChannelLifecycleManager:
         global_settings = get_global_lifecycle_settings()
         delete_timing = group.get('channel_delete_timing') or global_settings['channel_delete_timing']
         sport = group.get('assigned_sport')
+
+        # Get template for duration calculation
+        template = None
+        if group.get('event_template_id'):
+            template = get_template(group['event_template_id'])
 
         # Get all active (non-deleted) channels for this group
         channels = get_managed_channels_for_group(group['id'])
@@ -958,8 +1004,8 @@ class ChannelLifecycleManager:
                 if not event:
                     continue
 
-                # Recalculate scheduled delete time
-                new_delete_at = calculate_delete_time(event, delete_timing, self.timezone, sport, self.settings)
+                # Recalculate scheduled delete time (uses template duration if custom)
+                new_delete_at = calculate_delete_time(event, delete_timing, self.timezone, sport, self.settings, template)
                 old_delete_at = channel.get('scheduled_delete_at')
 
                 old_delete_str = old_delete_at if old_delete_at else None
