@@ -259,7 +259,9 @@ def create_template(data: Dict[str, Any]) -> int:
             'no_game_enabled', 'no_game_title', 'no_game_description', 'no_game_duration',
             'pregame_enabled', 'pregame_periods', 'pregame_title', 'pregame_subtitle', 'pregame_description', 'pregame_art_url',
             'postgame_enabled', 'postgame_periods', 'postgame_title', 'postgame_subtitle', 'postgame_description', 'postgame_art_url',
+            'postgame_conditional_enabled', 'postgame_description_final', 'postgame_description_not_final',
             'idle_enabled', 'idle_title', 'idle_subtitle', 'idle_description', 'idle_art_url',
+            'idle_conditional_enabled', 'idle_description_final', 'idle_description_not_final',
             'description_options'
         ]
 
