@@ -1,4 +1,4 @@
-# Teamarr - Dynamic Sports Team EPG Generator
+# Teamarr - Dynamic EPG Generator for Sports Channels
 
 **Transform ESPN's sports schedules into professional XMLTV EPG files for your IPTV system.**
 

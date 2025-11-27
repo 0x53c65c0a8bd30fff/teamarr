@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 
 from utils import to_pascal_case
+from utils.time_format import format_time as fmt_time, get_time_settings
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,8 @@ class EventTemplateEngine:
         event = context.get('event', {}) or {}
         stream = context.get('stream', {}) or {}
         group_info = context.get('group_info', {}) or {}
-        epg_timezone = context.get('epg_timezone', 'America/New_York')
+        epg_timezone = context.get('epg_timezone', 'America/Detroit')
+        time_format_settings = context.get('time_format_settings', {})
 
         # Extract team data
         home_team = event.get('home_team', {}) or {}
@@ -155,9 +157,14 @@ class EventTemplateEngine:
 
                 variables['game_date'] = local_datetime.strftime('%A, %B %d, %Y')
                 variables['game_date_short'] = local_datetime.strftime('%b %d')
-                variables['game_time'] = local_datetime.strftime('%I:%M %p %Z')
-                variables['game_time_12h'] = local_datetime.strftime('%I:%M %p')
-                variables['game_time_24h'] = local_datetime.strftime('%H:%M')
+
+                # Use user's time format preferences for game_time
+                if time_format_settings:
+                    tf, show_tz = get_time_settings(time_format_settings)
+                    variables['game_time'] = fmt_time(local_datetime, tf, show_tz)
+                else:
+                    variables['game_time'] = local_datetime.strftime('%I:%M %p %Z')
+
                 variables['game_day'] = local_datetime.strftime('%A')
                 variables['game_day_short'] = local_datetime.strftime('%a')
                 variables['today_tonight'] = 'tonight' if local_datetime.hour >= 17 else 'today'
@@ -337,7 +344,8 @@ def build_event_context(
     event: Dict,
     stream: Dict,
     group_info: Dict,
-    epg_timezone: str = 'America/New_York'
+    epg_timezone: str = 'America/Detroit',
+    time_format_settings: Dict = None
 ) -> Dict[str, Any]:
     """
     Build context dictionary for event template resolution.
@@ -347,6 +355,7 @@ def build_event_context(
         stream: Dispatcharr stream info
         group_info: Event EPG group configuration
         epg_timezone: Timezone for display
+        time_format_settings: User's time format preferences (time_format, show_timezone)
 
     Returns:
         Context dictionary ready for EventTemplateEngine.resolve()
@@ -355,5 +364,6 @@ def build_event_context(
         'event': event,
         'stream': stream,
         'group_info': group_info,
-        'epg_timezone': epg_timezone
+        'epg_timezone': epg_timezone,
+        'time_format_settings': time_format_settings or {}
     }

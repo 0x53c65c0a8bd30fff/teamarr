@@ -1,5 +1,5 @@
 """
-Teamarr - Sports Team EPG Generator Configuration
+Teamarr - Dynamic EPG Generator for Sports Channels
 """
 import subprocess
 import os
@@ -83,7 +83,7 @@ VERSION = get_version()
 
 # Application settings
 APP_NAME = "Teamarr"
-APP_DESCRIPTION = "Sports Team EPG Generator for IPTV"
+APP_DESCRIPTION = "Dynamic EPG Generator for Sports Channels"
 
 # Default settings
 DEFAULT_DAYS_AHEAD = 14

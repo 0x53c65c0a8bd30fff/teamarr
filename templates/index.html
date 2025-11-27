@@ -146,7 +146,7 @@
                     <tbody>
                         {% for entry in epg_history %}
                             <tr>
-                                <td>{{ entry.generated_at_formatted }}</td>
+                                <td><span class="format-datetime" data-utc="{{ entry.generated_at }}">{{ entry.generated_at_formatted }}</span></td>
                                 <td class="text-center">{{ entry.num_channels }}</td>
                                 <td class="text-center">{{ entry.num_events }}</td>
                                 <td class="text-center">{{ entry.num_programmes }}</td>
@@ -450,5 +450,15 @@ function showEPGUrl() {
     `;
     showNotification(message, 'info', 0, 'EPG URL');
 }
+
+// Format datetimes using global helper on page load
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.format-datetime').forEach(el => {
+        const utc = el.dataset.utc;
+        if (utc && typeof formatDateTime === 'function') {
+            el.textContent = formatDateTime(utc, { dateFormat: 'short' });
+        }
+    });
+});
 </script>
 {% endblock %}

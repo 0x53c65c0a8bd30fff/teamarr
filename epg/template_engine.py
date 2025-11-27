@@ -6,6 +6,7 @@ import json
 import re
 
 from utils import to_pascal_case
+from utils.time_format import format_time as fmt_time, get_time_settings
 
 class TemplateEngine:
     """Resolves template variables in user-defined strings"""
@@ -87,7 +88,8 @@ class TemplateEngine:
         streaks: dict,
         head_coach: str,
         player_leaders: dict,
-        epg_timezone: str
+        epg_timezone: str,
+        time_format_settings: dict = None
     ) -> Dict[str, str]:
         """
         Generate all 227 variables from a single game context
@@ -230,11 +232,16 @@ class TemplateEngine:
 
                 variables['game_date'] = local_datetime.strftime('%A, %B %d, %Y')
                 variables['game_date_short'] = local_datetime.strftime('%b %d')
-                variables['game_time'] = local_datetime.strftime('%I:%M %p %Z')
-                variables['game_time_12h'] = local_datetime.strftime('%I:%M %p')
-                variables['game_time_24h'] = local_datetime.strftime('%H:%M')
-                variables['game_day'] = game_datetime.strftime('%A')
-                variables['game_day_short'] = game_datetime.strftime('%a')
+
+                # Use user's time format preferences for game_time
+                if time_format_settings:
+                    tf, show_tz = get_time_settings(time_format_settings)
+                    variables['game_time'] = fmt_time(local_datetime, tf, show_tz)
+                else:
+                    variables['game_time'] = local_datetime.strftime('%I:%M %p %Z')
+
+                variables['game_day'] = local_datetime.strftime('%A')
+                variables['game_day_short'] = local_datetime.strftime('%a')
 
                 # Today vs Tonight based on 5pm cutoff in user's timezone
                 variables['today_tonight'] = 'tonight' if local_datetime.hour >= 17 else 'today'
@@ -732,7 +739,8 @@ class TemplateEngine:
         # Extract common context components
         team_config = context.get('team_config', {})
         team_stats = context.get('team_stats', {})
-        epg_timezone = context.get('epg_timezone', 'America/New_York')
+        epg_timezone = context.get('epg_timezone', 'America/Detroit')
+        time_format_settings = context.get('time_format_settings', {})
 
         # =====================================================================
         # BUILD CURRENT GAME VARIABLES (no suffix)
@@ -754,7 +762,8 @@ class TemplateEngine:
             streaks=current_streaks,
             head_coach=current_head_coach,
             player_leaders=current_player_leaders,
-            epg_timezone=epg_timezone
+            epg_timezone=epg_timezone,
+            time_format_settings=time_format_settings
         )
 
         # Add base variables (no suffix), excluding LAST_ONLY_VARS
@@ -777,7 +786,8 @@ class TemplateEngine:
                 streaks=next_game_ctx.get('streaks', {}),
                 head_coach=next_game_ctx.get('head_coach', ''),
                 player_leaders=next_game_ctx.get('player_leaders', {}),
-                epg_timezone=epg_timezone
+                epg_timezone=epg_timezone,
+                time_format_settings=time_format_settings
             )
 
             # Add .next suffix only to allowed variables
@@ -801,7 +811,8 @@ class TemplateEngine:
                 streaks=last_game_ctx.get('streaks', {}),
                 head_coach=last_game_ctx.get('head_coach', ''),
                 player_leaders=last_game_ctx.get('player_leaders', {}),
-                epg_timezone=epg_timezone
+                epg_timezone=epg_timezone,
+                time_format_settings=time_format_settings
             )
 
             # Add .last suffix only to allowed variables

@@ -1,12 +1,12 @@
 {
-  "version": "3.4.0",
-  "generated": "2025-11-26",
-  "total_variables": 149,
-  "base_variables": 136,
+  "version": "3.5.0",
+  "generated": "2025-11-27",
+  "total_variables": 147,
+  "base_variables": 134,
   "suffix_system": {
     "enabled": true,
     "description": "Optimized suffix system after comprehensive audit - only necessary suffixes are generated",
-    "total_with_suffixes": 290,
+    "total_with_suffixes": 284,
     "audit_summary": {
       "last_only": {
         "count": 11,
@@ -1738,11 +1738,12 @@
     },
     {
       "name": "game_time",
-      "description": "Game time",
+      "description": "Game time (honors user's time format and timezone settings)",
       "source": "`/schedule` \u2192 event.date",
       "category": "\ud83d\udcc5 Schedule & Broadcast",
       "icon": "\ud83c\udfae",
       "type": "string",
+      "format": "time_with_tz",
       "availability": "always",
       "sports": [
         "basketball",
@@ -1755,80 +1756,23 @@
         "next",
         "last"
       ],
+      "sample_utc_by_sport": {
+        "NBA": "00:00",
+        "NFL": "18:00",
+        "MLB": "17:10",
+        "NHL": "00:00",
+        "NCAAM": "00:00",
+        "NCAAF": "17:00",
+        "Soccer": "15:30"
+      },
       "examples_by_sport": {
         "NBA": "07:00 PM EST",
-        "NFL": "12:30 PM EST",
-        "MLB": "01:10 PM EDT",
+        "NFL": "01:00 PM EST",
+        "MLB": "12:10 PM EST",
         "NHL": "07:00 PM EST",
         "NCAAM": "07:00 PM EST",
         "NCAAF": "12:00 PM EST",
-        "Soccer": "11:30 AM EST"
-      },
-      "context": [
-        "team",
-        "event"
-      ]
-    },
-    {
-      "name": "game_time_12h",
-      "description": "12-hour format",
-      "source": "`/schedule` \u2192 event.date",
-      "category": "\ud83d\udcc5 Schedule & Broadcast",
-      "icon": "\ud83c\udfae",
-      "type": "string",
-      "availability": "always",
-      "sports": [
-        "basketball",
-        "football",
-        "hockey",
-        "baseball"
-      ],
-      "available_suffixes": [
-        "base",
-        "next",
-        "last"
-      ],
-      "examples_by_sport": {
-        "NBA": "07:00 PM",
-        "NFL": "12:30 PM",
-        "MLB": "01:10 PM",
-        "NHL": "07:00 PM",
-        "NCAAM": "07:00 PM",
-        "NCAAF": "12:00 PM",
-        "Soccer": "11:30 AM"
-      },
-      "context": [
-        "team",
-        "event"
-      ]
-    },
-    {
-      "name": "game_time_24h",
-      "description": "24-hour format",
-      "source": "`/schedule` \u2192 event.date",
-      "category": "\ud83d\udcc5 Schedule & Broadcast",
-      "icon": "\ud83c\udfae",
-      "type": "string",
-      "availability": "always",
-      "sports": [
-        "basketball",
-        "football",
-        "hockey",
-        "baseball"
-      ],
-      "available_suffixes": [
-        "base",
-        "next",
-        "last"
-      ],
-      "examples_by_sport": {
-        "NBA": "19:00",
-        "NFL": "12:30",
-        "MLB": "13:10",
-        "NHL": "19:00",
-        "NCAAM": "19:00",
-        "NCAAF": "12:00",
-        "Soccer": "11:30"
+        "Soccer": "10:30 AM EST"
       },
       "context": [
         "team",
@@ -1914,7 +1858,9 @@
         "baseball"
       ],
       "available_suffixes": [
-        "base"
+        "base",
+        "next",
+        "last"
       ],
       "examples_by_sport": {
         "NBA": "vs",
@@ -1945,7 +1891,9 @@
         "baseball"
       ],
       "available_suffixes": [
-        "base"
+        "base",
+        "next",
+        "last"
       ],
       "examples_by_sport": {
         "NBA": "at home",

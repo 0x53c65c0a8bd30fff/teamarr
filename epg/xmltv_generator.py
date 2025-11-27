@@ -8,7 +8,7 @@ import hashlib
 class XMLTVGenerator:
     """Generate XMLTV format EPG files"""
 
-    def __init__(self, generator_name: str = "Teamarr - Dynamic EPG Generator for Sports Team Channels",
+    def __init__(self, generator_name: str = "Teamarr - Dynamic EPG Generator for Sports Channels",
                  generator_url: str = "http://localhost:9195",
                  version: str = "1.0.0"):
         self.generator_name = generator_name
@@ -135,7 +135,7 @@ class XMLTVGenerator:
             # Use the start date of the event in user's timezone
             # Convert from UTC to user's timezone for correct date
             from zoneinfo import ZoneInfo
-            user_tz = settings.get('default_timezone', 'America/New_York')
+            user_tz = settings.get('default_timezone', 'America/Detroit')
             local_dt = event['start_datetime'].astimezone(ZoneInfo(user_tz))
             date_elem.text = local_dt.strftime('%Y%m%d')
 

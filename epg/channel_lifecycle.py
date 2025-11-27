@@ -468,7 +468,9 @@ class ChannelLifecycleManager:
             try:
                 home_team = event.get('home_team', {}).get('name', '')
                 away_team = event.get('away_team', {}).get('name', '')
-                event_date = event.get('date', '')[:10] if event.get('date') else None
+
+                # Store full UTC datetime (convert to user TZ in display)
+                event_date = event.get('date', '') or None
 
                 managed_id = create_managed_channel(
                     event_epg_group_id=group['id'],
@@ -926,7 +928,7 @@ def get_lifecycle_manager() -> Optional[ChannelLifecycleManager]:
     url = settings.get('dispatcharr_url')
     username = settings.get('dispatcharr_username')
     password = settings.get('dispatcharr_password')
-    timezone = settings.get('default_timezone', 'America/New_York')
+    timezone = settings.get('default_timezone', 'America/Detroit')
 
     # EPG source ID in Dispatcharr (for direct EPG injection)
     epg_data_id = settings.get('dispatcharr_epg_id')

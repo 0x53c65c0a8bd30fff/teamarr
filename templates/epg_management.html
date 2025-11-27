@@ -21,7 +21,7 @@
             </button>
             <div class="action-info">
                 {% if latest_epg %}
-                Last generated: {{ latest_epg.generated_at[:16].replace('T', ' ') }}<br>
+                Last generated: <span class="format-datetime" data-utc="{{ latest_epg.generated_at }}">{{ latest_epg.generated_at[:16].replace('T', ' ') }}</span><br>
                 {{ latest_epg.num_channels }} channels • {{ latest_epg.num_events }} events • {{ latest_epg.num_programmes }} total programs
                 {% else %}
                 No EPG generated yet
@@ -887,6 +887,14 @@ document.addEventListener('DOMContentLoaded', function() {
         // Store original content for search
         originalContent = content;
     }
+
+    // Format all datetime elements using global helper
+    document.querySelectorAll('.format-datetime').forEach(el => {
+        const utc = el.dataset.utc;
+        if (utc && typeof formatDateTime === 'function') {
+            el.textContent = formatDateTime(utc, { dateFormat: 'short' });
+        }
+    });
 });
 
 // Handle clicking on unresolved variables

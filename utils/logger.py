@@ -148,7 +148,7 @@ def setup_logging(app, log_level: str = 'DEBUG'):
 
     # Print startup banner
     app.logger.info('=' * 80)
-    app.logger.info('🚀 Teamarr - Dynamic EPG Generator for Sports Team Channels')
+    app.logger.info('🚀 Teamarr - Dynamic EPG Generator for Sports Channels')
     app.logger.info('=' * 80)
     app.logger.info(f'Log level: {log_level}')
     app.logger.info(f'Log directory: {log_dir}')

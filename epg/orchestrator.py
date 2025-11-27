@@ -94,7 +94,7 @@ class EPGOrchestrator:
 
         return normalized
 
-    def generate_epg(self, days_ahead: int = 14, epg_timezone: str = 'America/New_York', settings: dict = None, progress_callback=None, start_datetime: datetime = None) -> Dict[str, Any]:
+    def generate_epg(self, days_ahead: int = 14, epg_timezone: str = 'America/Detroit', settings: dict = None, progress_callback=None, start_datetime: datetime = None) -> Dict[str, Any]:
         """
         Generate complete EPG data for all active teams with templates
 
@@ -666,7 +666,7 @@ class EPGOrchestrator:
         events: List[dict],
         team: dict,
         api_calls_counter: dict,
-        epg_timezone: str = 'America/New_York'
+        epg_timezone: str = 'America/Detroit'
     ) -> List[dict]:
         """
         Enrich today's games with scoreboard data (odds, conferenceCompetition, etc.)
@@ -907,7 +907,7 @@ class EPGOrchestrator:
         team: dict,
         team_stats: dict = None,
         opponent_stats: dict = None,
-        epg_timezone: str = 'America/New_York',
+        epg_timezone: str = 'America/Detroit',
         schedule_data: dict = None,
         settings: dict = None,
         extended_events: List[dict] = None
@@ -1018,6 +1018,9 @@ class EPGOrchestrator:
             'epg_timezone': epg_timezone,
             'program_datetime': game_datetime,
 
+            # Time format settings for template engine
+            'time_format_settings': settings or {},
+
             # Next game context
             'next_game': next_context,
 
@@ -1075,7 +1078,7 @@ class EPGOrchestrator:
         game_events: List[dict],
         days_ahead: int,
         team_stats: dict = None,
-        epg_timezone: str = 'America/New_York',
+        epg_timezone: str = 'America/Detroit',
         extended_events: List[dict] = None,
         epg_start_datetime: datetime = None,
         api_path: str = '',
@@ -1228,7 +1231,7 @@ class EPGOrchestrator:
                         pregame_entries = self._create_filler_chunks(
                             day_start, first_game_start, max_hours,
                             team, 'pregame', games_today[0]['event'], team_stats,
-                            last_game, epg_timezone, api_path, schedule_data
+                            last_game, epg_timezone, api_path, schedule_data, settings
                         )
                         filler_entries.extend(pregame_entries)
 
@@ -1250,7 +1253,7 @@ class EPGOrchestrator:
                                 pregame_entries = self._create_filler_chunks(
                                     last_game_end, first_next_game_start, max_hours,
                                     team, 'pregame', next_day_games[0]['event'], team_stats,
-                                    games_today[-1]['event'], epg_timezone, api_path, schedule_data
+                                    games_today[-1]['event'], epg_timezone, api_path, schedule_data, settings
                                 )
                                 filler_entries.extend(pregame_entries)
                         else:
@@ -1261,7 +1264,7 @@ class EPGOrchestrator:
                                 postgame_entries = self._create_filler_chunks(
                                     last_game_end, next_day_end, max_hours,
                                     team, 'postgame', games_today[-1]['event'], team_stats,
-                                    games_today[-1]['event'], epg_timezone, api_path, schedule_data
+                                    games_today[-1]['event'], epg_timezone, api_path, schedule_data, settings
                                 )
                                 filler_entries.extend(postgame_entries)
                             elif midnight_mode == 'idle':
@@ -1274,7 +1277,7 @@ class EPGOrchestrator:
                                     idle_entries = self._create_filler_chunks(
                                         last_game_end, next_day_end, max_hours,
                                         team, 'idle', next_game, team_stats,
-                                        games_today[-1]['event'], epg_timezone, api_path, schedule_data
+                                        games_today[-1]['event'], epg_timezone, api_path, schedule_data, settings
                                     )
                                     filler_entries.extend(idle_entries)
                     else:
@@ -1283,7 +1286,7 @@ class EPGOrchestrator:
                             postgame_entries = self._create_filler_chunks(
                                 last_game_end, day_end, max_hours,
                                 team, 'postgame', games_today[-1]['event'], team_stats,
-                                games_today[-1]['event'], epg_timezone, api_path, schedule_data
+                                games_today[-1]['event'], epg_timezone, api_path, schedule_data, settings
                             )
                             filler_entries.extend(postgame_entries)
 
@@ -1325,7 +1328,7 @@ class EPGOrchestrator:
                     idle_entries = self._create_filler_chunks(
                         day_start, day_end, max_hours,
                         team, 'idle', next_game, team_stats,
-                        last_game, epg_timezone, api_path, schedule_data
+                        last_game, epg_timezone, api_path, schedule_data, settings
                     )
                     filler_entries.extend(idle_entries)
 
@@ -1368,9 +1371,10 @@ class EPGOrchestrator:
         game_event: dict = None,
         team_stats: dict = None,
         last_game_event: dict = None,
-        epg_timezone: str = 'America/New_York',
+        epg_timezone: str = 'America/Detroit',
         api_path: str = '',
-        schedule_data: dict = None
+        schedule_data: dict = None,
+        settings: dict = None
     ) -> List[dict]:
         """
         Create filler EPG entries, splitting into chunks based on max_hours
@@ -1444,7 +1448,8 @@ class EPGOrchestrator:
             'opponent_stats': {},  # Will be populated for next/last games
             'h2h': {},
             'epg_timezone': epg_timezone,
-            'program_datetime': program_datetime
+            'program_datetime': program_datetime,
+            'time_format_settings': settings or {}
         }
 
         # Set current game (None for idle, raw event for pregame/postgame)
@@ -1598,7 +1603,7 @@ class EPGOrchestrator:
         return max(started_games, key=lambda x: x[0])[1]
 
     def _enrich_last_game_with_score(self, last_game: Optional[dict], api_sport: str, api_league: str,
-                                      api_calls_counter: dict, epg_timezone: str = 'America/New_York') -> Optional[dict]:
+                                      api_calls_counter: dict, epg_timezone: str = 'America/Detroit') -> Optional[dict]:
         """
         Enrich last game event with scoreboard data to get final scores
 

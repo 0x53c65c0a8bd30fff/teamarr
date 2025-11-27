@@ -80,6 +80,22 @@ def run_migrations(conn):
         conn.commit()
         print(f"✅ Ran {migrations_run} migration(s)")
 
+    # Time format settings (added in v1.0.8)
+    time_format_columns = [
+        ("time_format", "TEXT DEFAULT '12h'"),  # '12h' or '24h'
+        ("show_timezone", "BOOLEAN DEFAULT 1"),  # Show timezone abbreviation (EST, PST, etc.)
+    ]
+
+    for col_name, col_def in time_format_columns:
+        if col_name not in existing_columns:
+            try:
+                cursor.execute(f"ALTER TABLE settings ADD COLUMN {col_name} {col_def}")
+                print(f"  ✅ Added column: settings.{col_name}")
+            except Exception as e:
+                print(f"  ⚠️ Could not add column {col_name}: {e}")
+
+    conn.commit()
+
     # Conditional postgame/idle description columns (added in v1.0.7)
     cursor.execute("PRAGMA table_info(templates)")
     template_columns = {row[1] for row in cursor.fetchall()}

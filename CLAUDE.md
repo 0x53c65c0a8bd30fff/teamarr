@@ -29,12 +29,12 @@ Teamarr generates XMLTV EPG data for sports team channels. It supports two modes
 ├── api/
 │   ├── espn_client.py        # ESPN API wrapper
 │   └── dispatcharr_client.py # Dispatcharr API client (M3U + Channels)
+├── utils/
+│   └── time_format.py        # Time formatting utilities
 ├── templates/                # Jinja2 HTML templates
-│   ├── template_form.html    # Template editor (team + event types)
-│   ├── template_list.html    # Templates listing
-│   ├── event_epg.html        # Event EPG groups management
+│   ├── base.html             # Base template with global JS helpers
+│   ├── settings.html         # Settings page
 │   ├── channels.html         # Managed channels table
-│   ├── event_groups_import.html  # Import modal
 │   └── ...
 └── config/
     └── variables.json        # Template variable definitions
@@ -108,44 +108,103 @@ python3 app.py
 4. **Phase 4: History & Stats** - Save to `epg_history` table (single source of truth)
 5. **Phase 5: Dispatcharr Refresh** - Auto-trigger EPG refresh if configured
 
-**Endpoint Architecture:**
-- `/generate/stream` (SSE) - Primary UI endpoint, streams progress via callbacks
-- `/generate` (POST) - API compatibility wrapper, calls `generate_all_epg()` synchronously
-- Both endpoints use the same underlying function - no duplicate implementations
+### Completed: Phase 10 (Time/Timezone Improvements)
 
-**Progress Callback System:**
-- `progress_callback(status, message, percent, **extra)` - High-level progress
-- `team_progress_callback(current, total, team_name, message)` - Per-team updates
-- Status values: `starting`, `progress`, `complete`, `error`
+**Global Time Format Settings:**
+- User-configurable 12-hour or 24-hour time format
+- Optional timezone abbreviation display (EST, PST, etc.)
+- Settings stored in database: `time_format`, `show_timezone`
+
+**Timezone Handling:**
+- Docker TZ environment variable sync on startup (`sync_timezone_from_env()`)
+- Fallback timezone: America/Detroit
+- Timezone validation on save (case-sensitive, rejects invalid values)
+- All dates/times stored as UTC, converted to user timezone for display
+
+**Template Variables:**
+- Consolidated to single `{game_time}` variable that honors user settings
+- Removed redundant `{game_time_12h}` and `{game_time_24h}` variants
+- Template previews (`/api/variables`) respect time format settings
+
+**JavaScript Helpers (base.html):**
+- `formatTime(dateInput, options)` - Format time with user's 12h/24h preference
+- `formatDate(dateInput, format)` - Format date in user's timezone
+- `formatDateTime(dateInput, options)` - Combined date and time
+- All helpers read settings from `window.TEAMARR_SETTINGS`
+
+**Managed Channels:**
+- `event_date` stored as full UTC datetime (e.g., "2025-11-28T01:20Z")
+- UI displays converted to user's local date/time
+- Fixes issue where UTC date differed from local date
 
 ---
 
-## Key Files in Phase 8
+## Settings Page Organization
+
+The settings page is organized into logical sections:
+
+1. **System Settings** - Timezone, Time Format (12h/24h), Show Timezone option
+
+2. **Team Based Streams**
+   - Days to Generate (1-14)
+   - Midnight Crossover Filler Type (idle/postgame)
+   - Default Channel ID Format
+
+3. **Event Based Streams**
+   - Earliest Creation timing
+   - Latest Deletion timing
+
+4. **EPG Generation**
+   - Output Path (relative path like `./data/teamarr.xml` works in both Docker and local)
+   - Event Duration Defaults (per-sport hours)
+   - Schedule (enable/frequency)
+
+5. **Dispatcharr Integration** - URL, credentials, EPG source selection
+
+6. **Advanced Settings** - XMLTV generator name/URL
+
+---
+
+## Key Files
 
 ### `epg/channel_lifecycle.py`
 Channel lifecycle management module:
 - `ChannelLifecycleManager` - coordinates channel creation/deletion with Dispatcharr
 - `should_create_channel(event, timing, timezone)` - checks if channel should be created
-- `calculate_delete_time(event, timing, timezone, sport)` - calculates deletion schedule using sport duration
-- `get_sport_duration_hours(sport)` - returns typical duration (football: 4h, basketball/hockey: 3h, baseball: 4h, soccer: 2.5h)
+- `calculate_delete_time(event, timing, timezone, sport)` - calculates deletion schedule
+- `get_sport_duration_hours(sport)` - returns typical duration
 - `generate_channel_name(event, template, timezone)` - generates channel name from template
 - `sync_group_settings(group)` - updates ALL channels when group settings change
-- `update_existing_channels(matched_streams, group)` - refreshes delete times with latest event data
 - `start_lifecycle_scheduler()` / `stop_lifecycle_scheduler()` - background scheduler
-- `get_lifecycle_manager()` - factory using settings from DB
 
-### `api/dispatcharr_client.py` - ChannelManager class
-```python
-class ChannelManager:
-    def create_channel(name, channel_number, stream_ids, ...) -> Dict
-    def update_channel(channel_id, data) -> Dict
-    def delete_channel(channel_id) -> Dict
-    def set_channel_epg(channel_id, epg_data_id) -> Dict  # Direct EPG injection
-    def get_channels() -> List[Dict]
-    def find_channel_by_number(channel_number) -> Optional[Dict]
-```
+### `epg/epg_consolidator.py`
+EPG file consolidation:
+- `get_data_dir(from_output_path)` - derives data directory from output path
+- `get_epg_paths(final_output_path)` - returns all EPG file paths
+- `merge_all_epgs(final_output_path)` - merges teams.xml + event_epg_*.xml
+- `after_team_epg_generation()` - saves teams.xml, triggers merge
+- `after_event_epg_generation()` - triggers merge after event EPG
+- `finalize_epg_generation()` - archives intermediate files
 
-### New API Endpoints (app.py)
+### `templates/base.html`
+Global template with:
+- CSS variables for theming
+- JavaScript helpers: `formatTime()`, `formatDate()`, `formatDateTime()`
+- `window.TEAMARR_SETTINGS` object with user preferences
+- Context processor injects settings into all templates
+
+### `templates/channels.html`
+Managed channels UI:
+- Active channels table with bulk delete (shift-click support)
+- Recently Deleted section (always visible, even when empty)
+- Event date/time displayed in user's timezone
+- `formatChannelDateTime()` helper for SQLite timestamp conversion
+
+---
+
+## API Endpoints
+
+### Channel Lifecycle
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/api/channel-lifecycle/status` | GET | Managed channels status, scheduler state |
@@ -153,10 +212,18 @@ class ChannelManager:
 | `/api/channel-lifecycle/channels/<id>` | DELETE | Manual channel deletion |
 | `/api/channel-lifecycle/process-deletions` | POST | Process pending deletions |
 | `/api/channel-lifecycle/scheduler` | POST | Start/stop background scheduler |
-| `/api/channel-lifecycle/cleanup-old` | POST | Hard delete old records |
 | `/api/managed-channels/bulk-delete` | POST | Bulk delete selected channels |
 
-### Database Schema (managed_channels)
+### EPG Generation
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/generate/stream` | GET | SSE endpoint for EPG generation with progress |
+| `/generate` | POST | API endpoint for EPG generation |
+| `/api/variables` | GET | Template variables with sample values |
+
+---
+
+## Database Schema (managed_channels)
 ```sql
 CREATE TABLE managed_channels (
     id INTEGER PRIMARY KEY,
@@ -169,11 +236,12 @@ CREATE TABLE managed_channels (
     channel_name TEXT,
     tvg_id TEXT,
     espn_event_id TEXT,
-    event_date TEXT,
+    event_date TEXT,           -- Full UTC datetime (e.g., "2025-11-28T01:20Z")
     home_team TEXT,
     away_team TEXT,
     scheduled_delete_at TIMESTAMP,
-    deleted_at TIMESTAMP
+    deleted_at TIMESTAMP,
+    dispatcharr_logo_id INTEGER
 );
 ```
 
@@ -189,19 +257,23 @@ CREATE TABLE managed_channels (
 6. **Channel creation flow**: Generate EPG first, then create channels and inject EPG
 7. **Sport-specific durations** for calculating event end times (handles midnight crossings)
 8. **Settings sync on every EPG generation** - ensures setting changes take effect immediately
+9. **UTC storage, local display** - all dates stored as UTC, converted for display
+10. **Relative output paths** - `./data/teamarr.xml` works in both Docker and local dev
 
 ## Lifecycle Timing Options
 
 **Channel Creation (`channel_create_timing`):**
-- `day_of` - Create on event day
-- `day_before` - Create day before event
+- `stream_available` - Create immediately when stream exists
+- `same_day` - Create on event day
+- `day_before` - Create 1 day before event
 - `2_days_before` - Create 2 days before
-- `week_before` - Create week before
+- `manual` - Never auto-create
 
 **Channel Deletion (`channel_delete_timing`):**
 - `stream_removed` - Delete when stream no longer detected
-- `end_of_day` - Delete at 23:59 of the day event ENDS (not starts)
-- `end_of_next_day` - Delete at 23:59 of the day after event ends
+- `same_day` - Delete at 23:59 of the day event ENDS
+- `day_after` - Delete at 23:59 of the day after event ends
+- `2_days_after` - Delete 2 days after event ends
 - `manual` - Never auto-delete
 
 **Sport Durations (for end time calculation):**
@@ -249,8 +321,8 @@ Dashboard → Templates → Teams → Events → EPG → Channels → Settings
 - **Teams**: Manage tracked teams, team aliases
 - **Events**: Configure event groups from Dispatcharr channel groups
 - **EPG**: View/download generated EPG XML
-- **Channels**: View/manage Teamarr-created channels in Dispatcharr
-- **Settings**: Dispatcharr connection, timezone, scheduled generation
+- **Channels**: View/manage Teamarr-created channels (always shows Recently Deleted section)
+- **Settings**: Organized into Team Based, Event Based, EPG Generation sections
 
 ---
 

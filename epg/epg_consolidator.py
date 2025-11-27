@@ -4,13 +4,14 @@ EPG Consolidator - Manages the EPG file pipeline
 File structure:
   /data/teams.xml         - Team-based EPG (one channel per team)
   /data/event_epg_*.xml   - Per-group event EPG files
-  /data/events.xml        - All event EPGs merged
-  /data/teamarr.xml       - Final combined EPG (teams + events)
+  /data/teamarr.xml       - Final combined EPG (teams + all events)
 
 Flow:
-  Team generation  → teams.xml  ─┐
-                                 ├─→ teamarr.xml
-  Event generation → events.xml ─┘
+  Team generation    → teams.xml       ─┐
+                                        ├─→ teamarr.xml
+  Event generation   → event_epg_*.xml ─┘
+
+Single-stage consolidation: teams.xml + all event_epg_*.xml → teamarr.xml
 """
 
 import os
@@ -24,10 +25,34 @@ logger = logging.getLogger(__name__)
 DEFAULT_DATA_DIR = '/app/data'
 
 
-def get_data_dir() -> str:
-    """Get data directory, preferring /app/data for Docker."""
-    if os.path.exists('/app/data'):
+def get_data_dir(from_output_path: str = None) -> str:
+    """
+    Get data directory for intermediate EPG files.
+
+    Priority:
+    1. Derive from output path if provided (keeps all files together)
+    2. Use /app/data if running in Docker container
+    3. Fall back to project's data dir for local development
+
+    Args:
+        from_output_path: If provided, use the parent directory of this path
+    """
+    # If output path provided, use its directory (keeps all files together)
+    # This works for both Docker and local dev because os.path.abspath() resolves
+    # relative paths based on the current working directory:
+    #   - Docker (cwd=/app): ./data/teamarr.xml → /app/data/teamarr.xml
+    #   - Local dev (cwd=/project): ./data/teamarr.xml → /project/data/teamarr.xml
+    if from_output_path:
+        output_abs = os.path.abspath(from_output_path)
+        return os.path.dirname(output_abs)
+
+    # Check if actually running in Docker container (not just if path exists)
+    # Docker containers have /.dockerenv or /run/.containerenv
+    in_docker = os.path.exists('/.dockerenv') or os.path.exists('/run/.containerenv')
+
+    if in_docker and os.path.exists('/app/data'):
         return '/app/data'
+
     # Fallback to project's data dir
     base_dir = os.path.dirname(os.path.dirname(__file__))
     return os.path.join(base_dir, 'data')
@@ -40,7 +65,8 @@ def get_epg_paths(final_output_path: str = None) -> Dict[str, str]:
     Args:
         final_output_path: Override for final merged output (from settings)
     """
-    data_dir = get_data_dir()
+    # Use output path's directory to keep all files together
+    data_dir = get_data_dir(final_output_path)
 
     # Final output path from settings or default
     if not final_output_path:
@@ -48,64 +74,87 @@ def get_epg_paths(final_output_path: str = None) -> Dict[str, str]:
 
     return {
         'teams': os.path.join(data_dir, 'teams.xml'),
-        'events': os.path.join(data_dir, 'events.xml'),
         'combined': final_output_path,
         'data_dir': data_dir
     }
 
 
-def consolidate_event_epgs() -> Dict[str, Any]:
+def cleanup_old_archives(data_dir: str) -> int:
     """
-    Merge all event_epg_*.xml files into events.xml.
+    Remove old .bak archive files from previous consolidation cycles.
 
     Returns:
-        Dict with success status and stats
+        Number of files deleted
     """
-    from epg.event_epg_generator import merge_xmltv_files
+    deleted = 0
+    bak_patterns = [
+        os.path.join(data_dir, 'teams.xml.bak'),
+        os.path.join(data_dir, 'event_epg_*.xml.bak'),
+        os.path.join(data_dir, 'events.xml.bak'),  # Legacy intermediate file
+    ]
 
-    paths = get_epg_paths()
-    data_dir = paths['data_dir']
+    for pattern in bak_patterns:
+        for bak_file in glob.glob(pattern):
+            try:
+                os.remove(bak_file)
+                logger.debug(f"Removed old archive: {os.path.basename(bak_file)}")
+                deleted += 1
+            except Exception as e:
+                logger.warning(f"Could not remove {bak_file}: {e}")
 
-    # Find all event EPG files
-    pattern = os.path.join(data_dir, 'event_epg_*.xml')
-    event_files = glob.glob(pattern)
+    # Also remove legacy events.xml if it exists (old two-stage intermediate)
+    legacy_events = os.path.join(data_dir, 'events.xml')
+    if os.path.exists(legacy_events):
+        try:
+            os.remove(legacy_events)
+            logger.info(f"Removed legacy events.xml")
+            deleted += 1
+        except Exception as e:
+            logger.warning(f"Could not remove legacy events.xml: {e}")
 
-    if not event_files:
-        logger.info("No event EPG files to consolidate")
-        # Create empty events.xml if no event files exist
-        empty_xml = '''<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE tv SYSTEM "xmltv.dtd">
-<tv generator-info-name="Teamarr Event EPG">
-</tv>'''
-        os.makedirs(data_dir, exist_ok=True)
-        with open(paths['events'], 'w') as f:
-            f.write(empty_xml)
-        return {
-            'success': True,
-            'files_merged': 0,
-            'output_path': paths['events']
-        }
-
-    logger.info(f"Consolidating {len(event_files)} event EPG files")
-
-    result = merge_xmltv_files(
-        file_paths=event_files,
-        output_path=paths['events'],
-        generator_name="Teamarr Event EPG"
-    )
-
-    return result
+    return deleted
 
 
-def merge_all_epgs(final_output_path: str = None) -> Dict[str, Any]:
+def archive_intermediate_files(files: List[str]) -> int:
     """
-    Merge teams.xml and events.xml into final output.
+    Archive intermediate files by renaming them to .bak.
 
-    This is the final merge step that creates the combined EPG
-    served to Dispatcharr.
+    Args:
+        files: List of file paths to archive
+
+    Returns:
+        Number of files archived
+    """
+    archived = 0
+    for filepath in files:
+        if os.path.exists(filepath):
+            bak_path = filepath + '.bak'
+            try:
+                # Remove existing .bak if present
+                if os.path.exists(bak_path):
+                    os.remove(bak_path)
+                os.rename(filepath, bak_path)
+                logger.debug(f"Archived: {os.path.basename(filepath)} -> {os.path.basename(bak_path)}")
+                archived += 1
+            except Exception as e:
+                logger.warning(f"Could not archive {filepath}: {e}")
+    return archived
+
+
+def merge_all_epgs(final_output_path: str = None, cleanup: bool = True) -> Dict[str, Any]:
+    """
+    Merge teams.xml and all event_epg_*.xml files into final output.
+
+    Single-stage consolidation that combines:
+    - teams.xml (team-based EPG)
+    - All event_epg_*.xml files (per-group event EPGs)
+
+    After successful merge, intermediate files are archived (.bak) and
+    old archives from previous cycles are deleted.
 
     Args:
         final_output_path: Final destination (from settings' epg_output_path)
+        cleanup: If True, archive intermediate files after merge (default: True)
 
     Returns:
         Dict with success status and stats
@@ -113,17 +162,28 @@ def merge_all_epgs(final_output_path: str = None) -> Dict[str, Any]:
     from epg.event_epg_generator import merge_xmltv_files
 
     paths = get_epg_paths(final_output_path)
+    data_dir = paths['data_dir']
 
-    # Collect files that exist
+    # First, clean up old .bak archives from previous cycle
+    if cleanup:
+        old_deleted = cleanup_old_archives(data_dir)
+        if old_deleted:
+            logger.debug(f"Cleaned up {old_deleted} old archive files")
+
+    # Collect all files to merge
     files_to_merge = []
 
+    # Include teams.xml if it exists
     if os.path.exists(paths['teams']):
         files_to_merge.append(paths['teams'])
         logger.debug(f"Including teams.xml in merge")
 
-    if os.path.exists(paths['events']):
-        files_to_merge.append(paths['events'])
-        logger.debug(f"Including events.xml in merge")
+    # Include all event_epg_*.xml files
+    event_pattern = os.path.join(data_dir, 'event_epg_*.xml')
+    event_files = glob.glob(event_pattern)
+    if event_files:
+        files_to_merge.extend(event_files)
+        logger.debug(f"Including {len(event_files)} event EPG files in merge")
 
     if not files_to_merge:
         logger.warning("No EPG files to merge - creating empty teamarr.xml")
@@ -131,7 +191,7 @@ def merge_all_epgs(final_output_path: str = None) -> Dict[str, Any]:
 <!DOCTYPE tv SYSTEM "xmltv.dtd">
 <tv generator-info-name="Teamarr">
 </tv>'''
-        os.makedirs(paths['data_dir'], exist_ok=True)
+        os.makedirs(data_dir, exist_ok=True)
         with open(paths['combined'], 'w') as f:
             f.write(empty_xml)
         return {
@@ -140,7 +200,9 @@ def merge_all_epgs(final_output_path: str = None) -> Dict[str, Any]:
             'output_path': paths['combined']
         }
 
-    logger.info(f"Merging {len(files_to_merge)} EPG files into teamarr.xml")
+    logger.info(f"Merging {len(files_to_merge)} EPG files into {paths['combined']}")
+    for f in files_to_merge:
+        logger.debug(f"  - {os.path.basename(f)}")
 
     result = merge_xmltv_files(
         file_paths=files_to_merge,
@@ -151,6 +213,13 @@ def merge_all_epgs(final_output_path: str = None) -> Dict[str, Any]:
     if result.get('success'):
         logger.info(f"Combined EPG: {result.get('channel_count')} channels, {result.get('programme_count')} programmes")
 
+        # Archive intermediate files after successful merge
+        if cleanup and files_to_merge:
+            archived = archive_intermediate_files(files_to_merge)
+            if archived:
+                logger.debug(f"Archived {archived} intermediate files")
+            result['files_archived'] = archived
+
     return result
 
 
@@ -159,6 +228,7 @@ def after_team_epg_generation(xml_content: str, final_output_path: str = None) -
     Called after team EPG is generated.
 
     Saves to teams.xml (hardcoded) then triggers merge to final output.
+    Does NOT archive intermediate files - that happens after the full generation cycle.
 
     Args:
         xml_content: Generated team XMLTV content
@@ -175,8 +245,8 @@ def after_team_epg_generation(xml_content: str, final_output_path: str = None) -
         f.write(xml_content)
     logger.info(f"Saved team EPG to {paths['teams']}")
 
-    # Trigger final merge
-    merge_result = merge_all_epgs(final_output_path)
+    # Trigger merge WITHOUT cleanup - cleanup happens after full generation cycle
+    merge_result = merge_all_epgs(final_output_path, cleanup=False)
 
     return {
         'teams_path': paths['teams'],
@@ -189,38 +259,65 @@ def after_event_epg_generation(group_id: int = None, final_output_path: str = No
     """
     Called after event EPG is generated for a group.
 
-    Consolidates all event_epg_*.xml → events.xml (hardcoded) then merges to final output.
+    Triggers merge of teams.xml + all event_epg_*.xml → teamarr.xml
+    Does NOT archive intermediate files - that happens after the full generation cycle.
 
     Args:
         group_id: Optional group ID that was just generated (for logging)
         final_output_path: Final merged destination (from settings' epg_output_path)
 
     Returns:
-        Dict with consolidation and merge results
+        Dict with merge results
     """
     if group_id:
-        logger.info(f"Event EPG updated for group {group_id}, consolidating...")
+        logger.info(f"Event EPG updated for group {group_id}, merging all EPGs...")
 
-    # Consolidate all event_epg_*.xml → events.xml (hardcoded)
-    consolidate_result = consolidate_event_epgs()
-
-    if not consolidate_result.get('success'):
-        return {
-            'success': False,
-            'error': f"Consolidation failed: {consolidate_result.get('error')}",
-            'consolidate_result': consolidate_result
-        }
-
-    # Trigger final merge
-    merge_result = merge_all_epgs(final_output_path)
+    # Trigger merge WITHOUT cleanup - cleanup happens after full generation cycle
+    merge_result = merge_all_epgs(final_output_path, cleanup=False)
 
     paths = get_epg_paths(final_output_path)
     return {
         'success': merge_result.get('success', False),
-        'events_path': paths['events'],
         'combined_path': paths['combined'],
-        'consolidate_result': consolidate_result,
         'merge_result': merge_result
+    }
+
+
+def finalize_epg_generation(final_output_path: str = None) -> Dict[str, Any]:
+    """
+    Finalize EPG generation by archiving intermediate files.
+
+    Call this ONCE at the end of the full generation cycle (after all teams and events).
+
+    Args:
+        final_output_path: Final merged destination (from settings' epg_output_path)
+
+    Returns:
+        Dict with cleanup stats
+    """
+    paths = get_epg_paths(final_output_path)
+    data_dir = paths['data_dir']
+
+    # Clean up old archives first
+    old_deleted = cleanup_old_archives(data_dir)
+
+    # Collect files to archive
+    files_to_archive = []
+    if os.path.exists(paths['teams']):
+        files_to_archive.append(paths['teams'])
+
+    event_pattern = os.path.join(data_dir, 'event_epg_*.xml')
+    event_files = glob.glob(event_pattern)
+    files_to_archive.extend(event_files)
+
+    # Archive them
+    archived = archive_intermediate_files(files_to_archive)
+
+    logger.info(f"Finalized EPG: archived {archived} files, cleaned {old_deleted} old archives")
+
+    return {
+        'files_archived': archived,
+        'old_archives_deleted': old_deleted
     }
 
 
@@ -236,37 +333,80 @@ def get_epg_stats() -> Dict[str, Any]:
     paths = get_epg_paths()
     stats = {}
 
-    for name, path in paths.items():
-        if name == 'data_dir':
-            continue
-
-        if os.path.exists(path):
-            try:
-                tree = ET.parse(path)
-                root = tree.getroot()
-                stats[name] = {
-                    'exists': True,
-                    'path': path,
-                    'size': os.path.getsize(path),
-                    'channels': len(root.findall('channel')),
-                    'programmes': len(root.findall('programme')),
-                    'modified': os.path.getmtime(path)
-                }
-            except Exception as e:
-                stats[name] = {
-                    'exists': True,
-                    'path': path,
-                    'error': str(e)
-                }
-        else:
-            stats[name] = {
-                'exists': False,
-                'path': path
+    # Check teams.xml
+    if os.path.exists(paths['teams']):
+        try:
+            tree = ET.parse(paths['teams'])
+            root = tree.getroot()
+            stats['teams'] = {
+                'exists': True,
+                'path': paths['teams'],
+                'size': os.path.getsize(paths['teams']),
+                'channels': len(root.findall('channel')),
+                'programmes': len(root.findall('programme')),
+                'modified': os.path.getmtime(paths['teams'])
             }
+        except Exception as e:
+            stats['teams'] = {
+                'exists': True,
+                'path': paths['teams'],
+                'error': str(e)
+            }
+    else:
+        stats['teams'] = {
+            'exists': False,
+            'path': paths['teams']
+        }
 
-    # Count event EPG files
+    # Check combined output
+    if os.path.exists(paths['combined']):
+        try:
+            tree = ET.parse(paths['combined'])
+            root = tree.getroot()
+            stats['combined'] = {
+                'exists': True,
+                'path': paths['combined'],
+                'size': os.path.getsize(paths['combined']),
+                'channels': len(root.findall('channel')),
+                'programmes': len(root.findall('programme')),
+                'modified': os.path.getmtime(paths['combined'])
+            }
+        except Exception as e:
+            stats['combined'] = {
+                'exists': True,
+                'path': paths['combined'],
+                'error': str(e)
+            }
+    else:
+        stats['combined'] = {
+            'exists': False,
+            'path': paths['combined']
+        }
+
+    # Count and list event EPG files
     pattern = os.path.join(paths['data_dir'], 'event_epg_*.xml')
     event_files = glob.glob(pattern)
-    stats['event_group_files'] = len(event_files)
+    stats['event_group_files'] = {
+        'count': len(event_files),
+        'files': [os.path.basename(f) for f in event_files]
+    }
+
+    # Get stats for each event file
+    event_stats = []
+    for event_file in event_files:
+        try:
+            tree = ET.parse(event_file)
+            root = tree.getroot()
+            event_stats.append({
+                'file': os.path.basename(event_file),
+                'channels': len(root.findall('channel')),
+                'programmes': len(root.findall('programme'))
+            })
+        except Exception as e:
+            event_stats.append({
+                'file': os.path.basename(event_file),
+                'error': str(e)
+            })
+    stats['event_files_detail'] = event_stats
 
     return stats

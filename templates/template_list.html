@@ -63,7 +63,7 @@
                                 {% endif %}
                             </td>
                             <td class="text-muted">
-                                {{ template.created_at[:10] }}
+                                <span class="format-date" data-utc="{{ template.created_at }}">{{ template.created_at[:10] }}</span>
                             </td>
                             <td>
                                 <div class="action-buttons">
@@ -116,6 +116,16 @@ function confirmDelete(templateName, templateType, teamCount, groupCount) {
 
     return confirm(message);
 }
+
+// Format dates using global helper on page load
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.format-date').forEach(el => {
+        const utc = el.dataset.utc;
+        if (utc && typeof formatDate === 'function') {
+            el.textContent = formatDate(utc, 'short');
+        }
+    });
+});
 </script>
 
 <style>

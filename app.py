@@ -1,5 +1,5 @@
 """
-Teamarr - Dynamic EPG Generator for Sports Team Channels
+Teamarr - Dynamic EPG Generator for Sports Channels
 Flask web application for managing templates and teams
 """
 
@@ -96,7 +96,7 @@ else:
 # Initialize EPG components
 epg_orchestrator = EPGOrchestrator()
 xmltv_generator = XMLTVGenerator(
-    generator_name="Teamarr - Dynamic EPG Generator for Sports Team Channels",
+    generator_name="Teamarr - Dynamic EPG Generator for Sports Channels",
     generator_url="http://localhost:9195",
     version=VERSION
 )
@@ -111,9 +111,17 @@ last_run_time = None
 # =============================================================================
 
 @app.context_processor
-def inject_version():
-    """Make version available to all templates"""
-    return dict(version=VERSION)
+def inject_globals():
+    """Make version and settings available to all templates"""
+    # Get settings for time format display
+    try:
+        conn = get_connection()
+        settings_row = conn.execute("SELECT * FROM settings WHERE id = 1").fetchone()
+        conn.close()
+        settings = dict(settings_row) if settings_row else {}
+    except Exception:
+        settings = {}
+    return dict(version=VERSION, settings=settings)
 
 # =============================================================================
 # SCHEDULER FUNCTIONS
@@ -226,11 +234,14 @@ def refresh_event_group_core(group, m3u_manager, wait_for_m3u=True):
             if group.get('event_template_id'):
                 event_template = get_template(group['event_template_id'])
 
+            # Use settings output path to derive data directory (keeps all files together)
+            output_path = settings.get('epg_output_path', '/app/data/teamarr.xml')
+
             epg_result = generate_event_epg(
                 matched_streams=matched_streams,
                 group_info=group,
                 save=True,
-                data_dir=get_data_dir(),
+                data_dir=get_data_dir(output_path),
                 settings=settings,
                 template=event_template
             )
@@ -331,11 +342,12 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
     AUTHORITATIVE EPG generation function - single source of truth for ALL EPG generation.
 
     This function handles the complete EPG pipeline:
-    1. Generates team-based EPG → saves to teams.xml via consolidator
-    2. Refreshes all enabled event groups with templates → saves to events.xml via consolidator
-    3. Processes channel lifecycle (scheduled deletions)
-    4. Saves statistics to epg_history (Single Source of Truth)
-    5. Returns combined statistics
+    1. Generates team-based EPG → saves to teams.xml
+    2. Refreshes all enabled event groups with templates → saves to event_epg_*.xml files
+    3. Consolidator merges teams.xml + all event_epg_*.xml → teamarr.xml
+    4. Processes channel lifecycle (scheduled deletions)
+    5. Saves statistics to epg_history (Single Source of Truth)
+    6. Returns combined statistics
 
     All EPG generation (scheduler, manual, streaming) MUST use this function.
 
@@ -348,7 +360,7 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
     Returns:
         dict with keys: success, team_stats, event_stats, lifecycle_stats, generation_time, error
     """
-    from epg.epg_consolidator import after_team_epg_generation, get_data_dir
+    from epg.epg_consolidator import after_team_epg_generation, get_data_dir, finalize_epg_generation
     from database import save_epg_generation_stats
     from epg.channel_lifecycle import get_lifecycle_manager
     import hashlib
@@ -393,7 +405,7 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
             settings = dict(settings_row)
 
         days_ahead = settings.get('epg_days_ahead', 14)
-        epg_timezone = settings.get('default_timezone', 'America/New_York')
+        epg_timezone = settings.get('default_timezone', 'America/Detroit')
         output_path = settings.get('epg_output_path', '/app/data/teamarr.xml')
 
         report_progress('starting', 'Initializing EPG generation...', 0)
@@ -607,6 +619,9 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
                        total_programmes=total_programmes,
                        total_channels=total_channels,
                        generation_time=generation_time)
+
+        # Finalize: archive intermediate files (runs once at end of full cycle)
+        finalize_epg_generation(output_path)
 
         return {
             'success': True,
@@ -838,7 +853,7 @@ def index():
 
     # Get timezone from settings
     settings_row = cursor.execute("SELECT default_timezone FROM settings WHERE id = 1").fetchone()
-    user_timezone = settings_row[0] if settings_row else 'America/New_York'
+    user_timezone = settings_row[0] if settings_row else 'America/Detroit'
 
     # Get latest EPG generation stats (legacy query for backwards compatibility)
     latest_epg = cursor.execute("""
@@ -1479,7 +1494,7 @@ def channels_list():
     conn = get_connection()
     settings = dict(conn.execute("SELECT * FROM settings WHERE id = 1").fetchone())
     conn.close()
-    epg_timezone = settings.get('default_timezone', 'America/New_York')
+    epg_timezone = settings.get('default_timezone', 'America/Detroit')
     return render_template('channels.html', epg_timezone=epg_timezone)
 
 # =============================================================================
@@ -1578,6 +1593,8 @@ def settings_form():
 @app.route('/settings', methods=['POST'])
 def settings_update():
     """Update global settings"""
+    from zoneinfo import ZoneInfo
+
     try:
         conn = get_connection()
         cursor = conn.cursor()
@@ -1586,6 +1603,7 @@ def settings_update():
         fields = [
             'epg_days_ahead', 'epg_update_time', 'epg_output_path',
             'default_timezone', 'default_channel_id_format', 'midnight_crossover_mode',
+            'time_format', 'show_timezone',
             'game_duration_default',
             'game_duration_basketball', 'game_duration_football', 'game_duration_hockey',
             'game_duration_baseball', 'game_duration_soccer',
@@ -1600,9 +1618,21 @@ def settings_update():
         for field in fields:
             value = request.form.get(field)
             if value is not None:
-                # Handle boolean fields
+                # Handle boolean fields (checkboxes)
                 if field in ['cache_enabled', 'auto_generate_enabled', 'dispatcharr_enabled']:
                     value = 1 if value == 'on' else 0
+                # Handle radio button boolean fields (value is '1' or '0')
+                elif field == 'show_timezone':
+                    value = int(value)
+                # Validate timezone before saving
+                elif field == 'default_timezone':
+                    value = value.strip() if value else 'America/Detroit'
+                    try:
+                        ZoneInfo(value)  # Validate - raises if invalid
+                    except Exception:
+                        flash(f'Invalid timezone: "{value}". Timezone names are case-sensitive (e.g., America/Chicago, not America/chicago).', 'error')
+                        conn.close()
+                        return redirect(url_for('settings_form'))
                 # Handle numeric fields
                 elif field in ['epg_days_ahead', 'cache_duration_hours', 'dispatcharr_epg_id']:
                     value = int(value) if value else None
@@ -1992,12 +2022,36 @@ def api_epg_stats_history():
 
 @app.route('/api/variables', methods=['GET'])
 def api_variables():
-    """Get all template variables from variables.json with suffix availability"""
+    """Get all template variables from variables.json with suffix availability.
+
+    Time variables with sample_utc_by_sport are converted to user's timezone
+    and formatted according to user's time_format and show_timezone settings.
+    """
     import json
+    from datetime import datetime as dt, timezone
+    from zoneinfo import ZoneInfo
+
     variables_path = os.path.join(os.path.dirname(__file__), 'config', 'variables.json')
     try:
         with open(variables_path, 'r', encoding='utf-8') as f:
             variables_data = json.load(f)
+
+        # Get user's timezone and time format settings
+        conn = get_connection()
+        settings = dict(conn.execute("SELECT * FROM settings WHERE id = 1").fetchone())
+        conn.close()
+        user_tz_name = settings.get('default_timezone', 'America/Detroit')
+        user_time_format = settings.get('time_format', '12h')  # '12h' or '24h'
+        user_show_tz = settings.get('show_timezone', 1) in (1, '1', True, 'true')
+
+        try:
+            user_tz = ZoneInfo(user_tz_name)
+        except Exception:
+            user_tz = ZoneInfo('America/Detroit')
+
+        # Get timezone abbreviation for display
+        now = dt.now(user_tz)
+        tz_abbrev = now.strftime('%Z')  # e.g., "EST", "PST", "CDT"
 
         # Ensure all variables have available_suffixes field (should be in JSON)
         # If missing or blank, default to all three suffixes
@@ -2005,6 +2059,46 @@ def api_variables():
             if 'available_suffixes' not in var or not var['available_suffixes']:
                 # Fallback: allow all three contexts if field is missing or blank
                 var['available_suffixes'] = ['base', 'next', 'last']
+
+            # Convert UTC sample times to user's timezone
+            if var.get('format') and var['format'].startswith('time') and var.get('sample_utc_by_sport'):
+                converted_examples = {}
+                for sport, utc_time_str in var['sample_utc_by_sport'].items():
+                    try:
+                        # Parse UTC time (HH:MM format)
+                        hour, minute = map(int, utc_time_str.split(':'))
+                        # Create a UTC datetime
+                        utc_dt = dt(2025, 1, 15, hour, minute, 0, tzinfo=timezone.utc)
+                        # Convert to user's timezone
+                        local_dt = utc_dt.astimezone(user_tz)
+                        local_tz_abbrev = local_dt.strftime('%Z')
+
+                        # Format based on variable type
+                        if var['format'] == 'time_with_tz':
+                            # Main game_time variable - honor user's time_format and show_timezone settings
+                            if user_time_format == '24h':
+                                time_str = local_dt.strftime('%H:%M')
+                            else:
+                                time_str = local_dt.strftime('%I:%M %p').lstrip('0')
+                            if user_show_tz:
+                                converted_examples[sport] = f"{time_str} {local_tz_abbrev}"
+                            else:
+                                converted_examples[sport] = time_str
+                        elif var['format'] == 'time_12h':
+                            # Explicit 12h format - always 12h, never show timezone
+                            converted_examples[sport] = local_dt.strftime('%I:%M %p').lstrip('0')
+                        elif var['format'] == 'time_24h':
+                            # Explicit 24h format - always 24h, never show timezone
+                            converted_examples[sport] = local_dt.strftime('%H:%M')
+                        else:
+                            converted_examples[sport] = local_dt.strftime('%I:%M %p').lstrip('0')
+                    except Exception as e:
+                        # Fall back to original example if conversion fails
+                        app.logger.warning(f"Time conversion failed for {var.get('name')}/{sport}: {e}")
+                        converted_examples[sport] = var.get('examples_by_sport', {}).get(sport, utc_time_str)
+
+                # Replace examples_by_sport with converted values
+                var['examples_by_sport'] = converted_examples
 
         return jsonify(variables_data)
     except Exception as e:
@@ -3020,22 +3114,24 @@ def api_event_epg_refresh_stream(group_id):
 
             if matched_streams:
                 from epg.event_epg_generator import generate_event_epg
-                from epg.epg_consolidator import get_data_dir
+                from epg.epg_consolidator import get_data_dir, after_event_epg_generation
+
+                # Get settings first to derive consistent data directory
+                conn = get_connection()
+                settings = dict(conn.execute("SELECT * FROM settings WHERE id = 1").fetchone())
+                conn.close()
+                final_output_path = settings.get('epg_output_path', '/app/data/teamarr.xml')
+
                 epg_result = generate_event_epg(
                     matched_streams=matched_streams,
                     group_info=group,
                     save=True,
-                    data_dir=get_data_dir()  # Use consistent data dir (Docker or local)
+                    data_dir=get_data_dir(final_output_path)  # Use settings path for consistency
                 )
 
                 # Step 5: Consolidate
                 yield f"data: {json.dumps({'type': 'progress', 'step': 5, 'total': 5, 'message': 'Consolidating EPG files...'})}\n\n"
 
-                from epg.epg_consolidator import after_event_epg_generation
-                conn = get_connection()
-                settings = dict(conn.execute("SELECT * FROM settings WHERE id = 1").fetchone())
-                conn.close()
-                final_output_path = settings.get('epg_output_path', '/app/data/teamarr.xml')
                 after_event_epg_generation(group_id, final_output_path)
 
             # Complete
@@ -3855,10 +3951,51 @@ def _extract_team_form_data(form):
     return data
 
 # =============================================================================
+# STARTUP INITIALIZATION
+# =============================================================================
+
+def sync_timezone_from_env():
+    """Sync timezone setting from environment variable (for Docker deployments).
+
+    Checks TZ environment variable and updates the database setting if present.
+    This runs on startup so Docker compose timezone settings are honored.
+    Falls back to America/Detroit if no env var and no existing setting.
+    """
+    env_tz = os.environ.get('TZ')
+    if env_tz:
+        try:
+            # Validate the timezone
+            from zoneinfo import ZoneInfo
+            ZoneInfo(env_tz)  # Will raise if invalid
+
+            conn = get_connection()
+            conn.execute("UPDATE settings SET default_timezone = ? WHERE id = 1", (env_tz,))
+            conn.commit()
+            conn.close()
+            app.logger.info(f"🌍 Timezone synced from TZ env var: {env_tz}")
+        except Exception as e:
+            app.logger.warning(f"⚠️ Invalid TZ env var '{env_tz}': {e}")
+    else:
+        # No env var - check if default_timezone is set, if not set to Detroit
+        try:
+            conn = get_connection()
+            row = conn.execute("SELECT default_timezone FROM settings WHERE id = 1").fetchone()
+            if not row or not row[0]:
+                conn.execute("UPDATE settings SET default_timezone = 'America/Detroit' WHERE id = 1")
+                conn.commit()
+                app.logger.info("🌍 No TZ env var, defaulting to America/Detroit")
+            conn.close()
+        except Exception as e:
+            app.logger.warning(f"⚠️ Could not check/set default timezone: {e}")
+
+# =============================================================================
 # RUN APPLICATION
 # =============================================================================
 
 if __name__ == '__main__':
+    # Sync timezone from environment variable (Docker)
+    sync_timezone_from_env()
+
     # Start the auto-generation scheduler
     # Only start in main process, not in werkzeug reloader process
     # In Docker/production, WERKZEUG_RUN_MAIN won't be set, so check differently

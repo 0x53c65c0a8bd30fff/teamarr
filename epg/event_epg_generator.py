@@ -38,7 +38,7 @@ class EventEPGGenerator:
         'soccer': 2.0,
     }
 
-    def __init__(self, timezone: str = 'America/New_York'):
+    def __init__(self, timezone: str = 'America/Detroit'):
         """
         Initialize Event EPG Generator.
 
@@ -176,16 +176,16 @@ class EventEPGGenerator:
         # Display name - use template channel_name if available, else stream name
         display_name = ET.SubElement(channel, 'display-name')
         if template and template.get('channel_name'):
-            epg_timezone = settings.get('epg_timezone', 'America/New_York') if settings else 'America/New_York'
-            template_ctx = build_event_context(event, stream, group_info, epg_timezone)
+            epg_timezone = settings.get('epg_timezone', 'America/Detroit') if settings else 'America/Detroit'
+            template_ctx = build_event_context(event, stream, group_info, epg_timezone, settings)
             display_name.text = self._template_engine.resolve(template['channel_name'], template_ctx)
         else:
             display_name.text = stream.get('name', '')
 
         # Channel icon/logo - use template channel_logo_url if available
         if template and template.get('channel_logo_url'):
-            epg_timezone = settings.get('epg_timezone', 'America/New_York') if settings else 'America/New_York'
-            template_ctx = build_event_context(event, stream, group_info, epg_timezone)
+            epg_timezone = settings.get('epg_timezone', 'America/Detroit') if settings else 'America/Detroit'
+            template_ctx = build_event_context(event, stream, group_info, epg_timezone, settings)
             logo_url = self._template_engine.resolve(template['channel_logo_url'], template_ctx)
             if logo_url:
                 icon = ET.SubElement(channel, 'icon')
@@ -223,8 +223,8 @@ class EventEPGGenerator:
         programme.set('channel', self._get_channel_id(stream))
 
         # Build template context for variable resolution
-        epg_timezone = settings.get('epg_timezone', 'America/New_York')
-        template_ctx = build_event_context(event, stream, group_info, epg_timezone)
+        epg_timezone = settings.get('epg_timezone', 'America/Detroit')
+        template_ctx = build_event_context(event, stream, group_info, epg_timezone, settings)
 
         # Title - from template (required)
         title = ET.SubElement(programme, 'title')
@@ -315,11 +315,11 @@ class EventEPGGenerator:
             return
 
         # Get user's timezone
-        epg_timezone = settings.get('epg_timezone', 'America/New_York')
+        epg_timezone = settings.get('epg_timezone', 'America/Detroit')
         try:
             tz = ZoneInfo(epg_timezone)
         except Exception:
-            tz = ZoneInfo('America/New_York')
+            tz = ZoneInfo('America/Detroit')
 
         # Convert event time to user's timezone
         event_local = event_date.astimezone(tz)
@@ -341,7 +341,7 @@ class EventEPGGenerator:
         programme.set('channel', self._get_channel_id(stream))
 
         # Build template context for variable resolution
-        template_ctx = build_event_context(event, stream, group_info, epg_timezone)
+        template_ctx = build_event_context(event, stream, group_info, epg_timezone, settings)
 
         # Title - use pregame_title from template
         title = ET.SubElement(programme, 'title')
@@ -384,11 +384,11 @@ class EventEPGGenerator:
             return
 
         # Get user's timezone
-        epg_timezone = settings.get('epg_timezone', 'America/New_York')
+        epg_timezone = settings.get('epg_timezone', 'America/Detroit')
         try:
             tz = ZoneInfo(epg_timezone)
         except Exception:
-            tz = ZoneInfo('America/New_York')
+            tz = ZoneInfo('America/Detroit')
 
         # Calculate event end time
         duration_hours = self._get_event_duration(group_info, settings, template)
@@ -414,7 +414,7 @@ class EventEPGGenerator:
         programme.set('channel', self._get_channel_id(stream))
 
         # Build template context for variable resolution
-        template_ctx = build_event_context(event, stream, group_info, epg_timezone)
+        template_ctx = build_event_context(event, stream, group_info, epg_timezone, settings)
 
         # Title - use postgame_title from template
         title = ET.SubElement(programme, 'title')
@@ -626,8 +626,11 @@ def merge_xmltv_files(
         tv.set('generator-info-name', generator_name)
         tv.set('generator-info-url', 'https://github.com/egyptiangio/teamarr')
 
+        # Collect all channels and programmes separately first
+        # XMLTV spec requires all <channel> elements before all <programme> elements
         seen_channels = set()
-        total_programmes = 0
+        all_channels = []
+        all_programmes = []
 
         for file_path in file_paths:
             if not os.path.exists(file_path):
@@ -638,21 +641,28 @@ def merge_xmltv_files(
                 tree = ET.parse(file_path)
                 root = tree.getroot()
 
-                # Add channels (skip duplicates)
+                # Collect channels (skip duplicates)
                 for channel in root.findall('channel'):
                     channel_id = channel.get('id')
                     if channel_id and channel_id not in seen_channels:
-                        tv.append(channel)
+                        all_channels.append(channel)
                         seen_channels.add(channel_id)
 
-                # Add all programmes
+                # Collect all programmes
                 for programme in root.findall('programme'):
-                    tv.append(programme)
-                    total_programmes += 1
+                    all_programmes.append(programme)
 
             except ET.ParseError as e:
                 logger.warning(f"Error parsing {file_path}: {e}")
                 continue
+
+        # Add all channels first, then all programmes (per XMLTV spec)
+        for channel in all_channels:
+            tv.append(channel)
+        for programme in all_programmes:
+            tv.append(programme)
+
+        total_programmes = len(all_programmes)
 
         # Convert to pretty XML
         rough_string = ET.tostring(tv, encoding='unicode')

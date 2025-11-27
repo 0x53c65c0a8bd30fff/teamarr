@@ -1,4 +1,4 @@
-// Teamarr - Sports Team EPG Generator JavaScript
+// Teamarr - Dynamic EPG Generator for Sports Channels
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {

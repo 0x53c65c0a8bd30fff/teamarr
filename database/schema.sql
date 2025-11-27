@@ -183,7 +183,7 @@ CREATE TABLE IF NOT EXISTS settings (
     cache_duration_hours INTEGER DEFAULT 24,
 
     -- XMLTV Settings
-    xmltv_generator_name TEXT DEFAULT 'Teamarr - Dynamic EPG Generator for Sports Team Channels',
+    xmltv_generator_name TEXT DEFAULT 'Teamarr - Dynamic EPG Generator for Sports Channels',
     xmltv_generator_url TEXT DEFAULT 'http://localhost:9195',
 
     -- Timezone (global EPG timezone - applies to all teams)
