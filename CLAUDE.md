@@ -3,13 +3,13 @@
 ## Project Overview
 Teamarr generates XMLTV EPG data for sports team channels. It supports two modes:
 1. **Team-based EPG** - Traditional mode: one team per channel, generates pregame/game/postgame/idle programs
-2. **Event-based EPG** - New mode: Dispatcharr channel groups with streams named by matchup (e.g., "Panthers @ 49ers")
+2. **Event-based EPG** - Dispatcharr channel groups with streams named by matchup (e.g., "Panthers @ 49ers")
 
 ## Tech Stack
 - **Backend**: Python/Flask (app.py)
 - **Database**: SQLite (teamarr.db)
 - **Frontend**: Jinja2 templates with vanilla JS
-- **External APIs**: ESPN API (schedules, teams), Dispatcharr API (M3U accounts, channel groups)
+- **External APIs**: ESPN API (schedules, teams), Dispatcharr API (M3U accounts, channel groups, channels)
 
 ## Key Directories
 ```
@@ -24,49 +24,22 @@ Teamarr generates XMLTV EPG data for sports team channels. It supports two modes
 │   ├── event_matcher.py      # Find ESPN events by team matchup
 │   ├── event_epg_generator.py    # XMLTV for event-based streams
 │   ├── event_template_engine.py  # Event variable substitution
-│   └── epg_consolidator.py   # Merge team + event EPGs
+│   ├── epg_consolidator.py   # Merge team + event EPGs
+│   └── channel_lifecycle.py  # Channel creation/deletion management
 ├── api/
 │   ├── espn_client.py        # ESPN API wrapper
-│   └── dispatcharr_client.py # Dispatcharr API client
+│   └── dispatcharr_client.py # Dispatcharr API client (M3U + Channels)
 ├── templates/                # Jinja2 HTML templates
 │   ├── template_form.html    # Template editor (team + event types)
 │   ├── template_list.html    # Templates listing
-│   ├── event_groups.html     # Event EPG groups management
+│   ├── event_epg.html        # Event EPG groups management
+│   ├── event_groups_import.html  # Import modal
 │   └── ...
 └── config/
     └── variables.json        # Template variable definitions
 ```
 
 ## Current Branch: `dev-withevents`
-
-### Event-based EPG Feature Status
-
-**Completed Phases:**
-- Phase 1: Database schema for event_epg_groups table
-- Phase 2: TeamMatcher - extracts team names from stream names using ESPN team database + user aliases
-- Phase 3: EventMatcher - finds upcoming/live ESPN events between detected teams
-- Phase 4: EventEPGGenerator - generates XMLTV for matched streams
-- Phase 5: EPG Consolidator - merges event EPGs with team EPGs into final output
-- Phase 6: API endpoints for Dispatcharr integration (accounts, groups, streams)
-- Phase 7: UI for event groups management (partially complete)
-
-**Phase 7 UI Details (Current Work):**
-- Event Groups page at `/event-groups` - list and manage Dispatcharr groups
-- Import modal to add groups from Dispatcharr
-- Group filtering by M3U account
-- Stream sorting (alphabetical)
-- League dropdown with proper college conference fetching
-- Templates support both "team" and "event" types
-- Event templates: simplified description (single field, no conditions/fallbacks)
-- Team templates: full complexity (multiple descriptions, conditions, priorities)
-- Template form hides Conditions tab and Idle section for event templates
-- Type column in templates list shows Team/Event badge
-
-**Key Behaviors:**
-- Event matching only works for **upcoming or in-progress** games (completed/FINAL games are filtered out)
-- Stream names must contain both team names with a separator (e.g., "Panthers @ 49ers", "Giants vs Cowboys")
-- TeamMatcher detects teams via ESPN database + user-defined aliases
-- EventMatcher searches team schedules for matchups within ±7 days
 
 ## Running the Server
 ```bash
@@ -75,171 +48,172 @@ python3 app.py
 # Server runs on port 9195
 ```
 
-## Template Types
-- **Team templates**: Full-featured with pregame/postgame/idle periods, conditional descriptions, multiple fallbacks
-- **Event templates**: Simplified - just title, description, pregame/postgame (no idle, no conditions, single description)
+---
 
-## Important Design Decisions
-1. Event templates use a single description field (not the multi-fallback system team templates use)
-2. Event matching skips completed games - EPG is for upcoming/live events only
-3. EPG consolidation merges all sources into a single XML file for Plex/Jellyfin
-4. Dispatcharr groups are filtered by M3U account to show only relevant groups
+## Feature Status
+
+### Completed: Phases 1-7 (Event-based EPG)
+- **Phase 1**: Database schema for event_epg_groups table
+- **Phase 2**: TeamMatcher - extracts team names from stream names using ESPN team database + user aliases
+- **Phase 3**: EventMatcher - finds upcoming/live ESPN events between detected teams
+- **Phase 4**: EventEPGGenerator - generates XMLTV for matched streams
+- **Phase 5**: EPG Consolidator - merges event EPGs with team EPGs into final output
+- **Phase 6**: API endpoints for Dispatcharr integration (accounts, groups, streams)
+- **Phase 7**: UI for event groups management
+
+### Completed: Phases 8.1-8.3 (Channel Lifecycle Management)
+
+**Phase 8.1: Database & API Foundation**
+- Added columns to `event_epg_groups`: `channel_start`, `channel_create_timing`, `channel_delete_timing`
+- Created `managed_channels` table to track Teamarr-created channels
+- Added `ChannelManager` class to `dispatcharr_client.py` for channel CRUD
+- Added `set_channel_epg()` for direct EPG injection
+
+**Phase 8.2: Channel Creation Logic**
+- Channel creation integrated into refresh endpoint
+- Flow: Match streams → Generate EPG → Create channels → Inject EPG
+- Channel number allocation from group's `channel_start`
+- Tracks channels in `managed_channels` table
+
+**Phase 8.3: Channel Lifecycle Scheduler**
+- `should_create_channel()` - timing check based on event date
+- `calculate_delete_time()` - scheduled deletion calculation
+- Background scheduler thread for automatic deletion processing
+- All timing uses user's configured timezone (no hardcoded defaults)
+
+### Completed: Phase 8.4 (UI Updates)
+
+- Dashboard redesigned with compact tiles (50% smaller)
+- Dashboard sections reordered to match tabs: Templates → Teams → Events → EPG Summary
+- Added "Manage →" links to each section header
+- Dashboard stats now include event-based data
+- Added `channel_name` field to event templates (template_form.html)
+  - Variables: {home_team}, {away_team}, {league}, {sport}, {event_date}
+  - Default: "{away_team} @ {home_team}"
+- Added edit button (✏️) to event groups table for editing settings
+- Edit modal with lifecycle settings:
+  - Template selection
+  - Channel start number
+  - Channel create timing (day_of, day_before, 2_days_before, week_before)
+  - Channel delete timing (stream_removed, end_of_day, end_of_next_day, manual)
+- Channel Start column already in event groups table
+- Smaller, more compact group tiles in import modal
+- Managed channels section with 4x taller scrollable table
+- Team aliases section with 4x taller scrollable table
+- Simplified stream preview modal (removed Action column, cleaner status display)
 
 ---
 
-## Phase 8: Channel Lifecycle Management (Upcoming)
+## Key Files Added in Phase 8
 
-### Overview
-When an event stream is matched, Teamarr will automatically create channels in Dispatcharr, assign the stream, set channel name/EPG, and manage the channel's lifecycle (creation timing, deletion timing).
+### `epg/channel_lifecycle.py`
+Channel lifecycle management module:
+- `ChannelLifecycleManager` - coordinates channel creation/deletion with Dispatcharr
+- `should_create_channel(event, timing, timezone)` - checks if channel should be created
+- `calculate_delete_time(event, timing, timezone)` - calculates deletion schedule
+- `generate_channel_name(event, template, timezone)` - generates channel name
+- `start_lifecycle_scheduler()` / `stop_lifecycle_scheduler()` - background scheduler
+- `get_lifecycle_manager()` - factory using settings from DB
 
-### Feature Requirements
+### `api/dispatcharr_client.py` - ChannelManager class
+```python
+class ChannelManager:
+    def create_channel(name, channel_number, stream_ids, ...) -> Dict
+    def update_channel(channel_id, data) -> Dict
+    def delete_channel(channel_id) -> Dict
+    def set_channel_epg(channel_id, epg_data_id) -> Dict  # Direct EPG injection
+    def get_channels() -> List[Dict]
+    def find_channel_by_number(channel_number) -> Optional[Dict]
+```
 
-1. **Dynamic Channel Creation in Dispatcharr**
-   - When a stream matches an ESPN event, create a channel via Dispatcharr API
-   - Assign the matched stream to the new channel
-   - Set channel name from event template's new `channel_name` field
-   - Inject EPG data directly into the channel (tvg-id may not be needed)
+### New API Endpoints (app.py)
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/channel-lifecycle/status` | GET | Managed channels status, scheduler state |
+| `/api/channel-lifecycle/channels` | GET | List managed channels |
+| `/api/channel-lifecycle/channels/<id>` | DELETE | Manual channel deletion |
+| `/api/channel-lifecycle/process-deletions` | POST | Process pending deletions |
+| `/api/channel-lifecycle/scheduler` | POST | Start/stop background scheduler |
+| `/api/channel-lifecycle/cleanup-old` | POST | Hard delete old records |
 
-2. **Channel Name in Event Templates**
-   - Add `channel_name` field to event template creation/editing
-   - Template variables available: `{home_team}`, `{away_team}`, `{league}`, etc.
-   - Example: `{away_team} @ {home_team}` → "Giants @ Cowboys"
-
-3. **Channel Lifecycle Settings (Per-Group)**
-   - **Create Channel**: day of event, day before, 2 days before, etc.
-   - **Delete Channel**: when stream no longer detected, end of game day, end of next day, etc.
-   - Configured at the `event_epg_groups` level, not globally
-
-4. **Track Created Channels**
-   - New database table to track channels Teamarr creates
-   - Fields: dispatcharr_channel_id, stream_id, event_id, created_at, scheduled_delete_at
-   - Enables cleanup and management of Teamarr-created channels
-
-5. **Channel Range / Starting Channel (Per-Group)**
-   - Each event group has a `channel_start` or `channel_range_start`/`channel_range_end`
-   - Channels created for this group use numbers within that range
-   - Display in event groups summary table
-
-### Database Changes Required
-
+### Database Schema (managed_channels)
 ```sql
--- Add to event_epg_groups table
-ALTER TABLE event_epg_groups ADD COLUMN channel_start INTEGER;
-ALTER TABLE event_epg_groups ADD COLUMN channel_create_timing TEXT DEFAULT 'day_of';
-   -- Values: 'day_of', 'day_before', '2_days_before', 'week_before'
-ALTER TABLE event_epg_groups ADD COLUMN channel_delete_timing TEXT DEFAULT 'stream_removed';
-   -- Values: 'stream_removed', 'end_of_day', 'end_of_next_day', 'manual'
-
--- New table: managed_channels
 CREATE TABLE managed_channels (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    event_epg_group_id INTEGER NOT NULL REFERENCES event_epg_groups(id),
-    dispatcharr_channel_id INTEGER NOT NULL,
-    dispatcharr_stream_id INTEGER NOT NULL,
+    id INTEGER PRIMARY KEY,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP,
+    event_epg_group_id INTEGER REFERENCES event_epg_groups(id),
+    dispatcharr_channel_id INTEGER UNIQUE,
+    dispatcharr_stream_id INTEGER,
     channel_number INTEGER,
     channel_name TEXT,
+    tvg_id TEXT,
     espn_event_id TEXT,
-    event_date TEXT,  -- YYYY-MM-DD
+    event_date TEXT,
+    home_team TEXT,
+    away_team TEXT,
     scheduled_delete_at TIMESTAMP,
-    deleted_at TIMESTAMP,
-    UNIQUE(dispatcharr_channel_id)
+    deleted_at TIMESTAMP
 );
 ```
 
-### API Changes Required (Dispatcharr Client)
+---
 
-**Reference:** See `/mnt/nvme/scratch/channelidentifiarr/backend/app.py` for working implementation.
+## Important Design Decisions
 
-Need to add to `dispatcharr_client.py`:
-```python
-class ChannelManager:
-    def create_channel(self, name, number, stream_ids, tvg_id=None, group_id=None, logo_id=None) -> Dict
-    def update_channel(self, channel_id, data) -> Dict
-    def delete_channel(self, channel_id) -> bool
-    def get_channels(self) -> List[Dict]
-    def get_channel_streams(self, channel_id) -> List[Dict]
-```
+1. **Event templates** use a single description field (not multi-fallback like team templates)
+2. **Event matching** skips completed games - EPG is for upcoming/live events only
+3. **EPG consolidation** merges all sources into a single XML file
+4. **Direct EPG injection** via `set_channel_epg()` API - no tvg_id matching needed
+5. **Timezone sensitivity** - all lifecycle timing uses user's configured timezone
+6. **Channel creation flow**: Generate EPG first, then create channels and inject EPG
 
-**Dispatcharr Channel API Endpoints (confirmed from channelidentifiarr):**
+## Lifecycle Timing Options
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/channels/channels/` | GET | List all channels (paginated) |
-| `/api/channels/channels/` | POST | Create channel |
-| `/api/channels/channels/{id}/` | PATCH | Update channel |
-| `/api/channels/channels/{id}/` | DELETE | Delete channel |
-| `/api/channels/channels/{id}/streams/` | GET | Get channel streams |
+**Channel Creation (`channel_create_timing`):**
+- `day_of` - Create on event day
+- `day_before` - Create day before event
+- `2_days_before` - Create 2 days before
+- `week_before` - Create week before
 
-**Create Channel Payload:**
-```python
-{
-    'name': 'Giants @ Cowboys',           # Channel name (required)
-    'channel_number': '5001',             # Channel number (required)
-    'tvg_id': 'teamarr-giants-cowboys',   # For XMLTV EPG matching
-    'tvc_guide_stationid': None,          # Gracenote ID (not needed for us)
-    'channel_group_id': 5,                # Optional group assignment
-    'logo_id': 239,                       # Optional logo reference
-    'streams': [stream_id]                # Stream IDs to attach
-}
-```
+**Channel Deletion (`channel_delete_timing`):**
+- `stream_removed` - Delete when stream no longer detected
+- `end_of_day` - Delete at end of event day
+- `end_of_next_day` - Delete at end of day after event
+- `manual` - Never auto-delete
 
-**Update Channel (stream assignment):**
-```python
-PATCH /api/channels/channels/{id}/
-{'streams': [stream_id1, stream_id2]}   # Order = priority
-```
+---
 
-**Key insight:** EPG is set via `tvg_id` field on channel creation - this should match our XMLTV output's channel ID.
+## Recent Fixes (This Session)
 
-### UI Changes Required
+1. **Path mismatch fix**: Event EPG was saving to `./data/` but consolidator looked in `/app/data/`. Fixed by using `get_data_dir()` consistently.
 
-1. **Event Template Form** (`templates/template_form.html`)
-   - Add "Channel Name" field for event templates
-   - Template variable support with preview
+2. **Game completed reason**: EventMatcher now returns "Game completed (previous day)" for streams where the game finished on a previous day.
 
-2. **Event Groups Table** (`templates/event_epg.html`)
-   - Add "Channel Start" column to summary table
-   - Show lifecycle settings in expanded view or edit modal
+3. **Double notification fix**: Removed success notification before `location.reload()` since it disappears immediately anyway.
 
-3. **Event Group Edit/Import Modal**
-   - Channel range/start field
-   - Channel create timing dropdown
-   - Channel delete timing dropdown
+4. **Scheduler handling**: Updated scheduler to handle both team and event EPG, doesn't treat "no teams" as error.
 
-4. **Managed Channels View** (new or within event groups)
-   - List channels Teamarr has created
-   - Manual delete option
-   - Status (active, scheduled for deletion)
+5. **Unified EPG Generation (Refactoring)**: Created shared core functions to eliminate code duplication:
+   - `refresh_event_group_core()` - Core logic for refreshing a single event group (M3U, matching, EPG gen, channels)
+   - `generate_all_epg()` - Unified function for both scheduled and manual EPG generation
+   - `run_scheduled_generation()` now calls `generate_all_epg()` directly
+   - `generate_epg_stream()` uses `refresh_event_group_core()` for event groups (no HTTP overhead)
+   - `api_event_epg_refresh()` uses `refresh_event_group_core()` for consistency
 
-### Implementation Phases
+6. **UX Simplification (Event Groups → Events, Channels tab)**:
+   - Removed confusing "Refresh" button from Event Groups - all EPG generation now via "Generate EPG"
+   - Renamed "Preview" button to "Test" - does lightweight matching without EPG generation
+   - Renamed "Event Groups" tab to "Events" for brevity
+   - Moved managed channels to new dedicated "Channels" tab
+   - New navigation order: Dashboard → Templates → Teams → Events → EPG → Channels → Settings
+   - Clearer mental model: Preview/Test = look, Generate EPG = build
 
-**Phase 8.1: Database & API Foundation**
-- Add new columns to event_epg_groups
-- Create managed_channels table
-- Research Dispatcharr channel API endpoints
-- Implement ChannelManager in dispatcharr_client.py
+---
 
-**Phase 8.2: Channel Creation Logic**
-- Modify event EPG generation to create channels when matched
-- Implement channel number allocation within group's range
-- Track created channels in managed_channels table
-
-**Phase 8.3: Channel Lifecycle Scheduler**
-- Create timing check: should channel be created now?
-- Delete timing check: should channel be deleted now?
-- Background job or on-refresh check
-
-**Phase 8.4: UI Updates**
-- Add channel_name to event templates
-- Add lifecycle settings to event groups UI
-- Add channel range to event groups table
-- Managed channels list view
-- Dashboard: Show event-based managed channels alongside team channels
-
-### What Might Need Work After Phase 8
-- Test with upcoming games
+## What's Next After Phase 8.4
+- Test with live upcoming games
 - Better UI feedback for stream matching issues
-- Scheduled refresh for event groups
-- More event template variables (venue, broadcast network, etc.)
+- Scheduled auto-refresh for event groups
+- More event template variables (venue, broadcast network)
 - Documentation/help text in UI

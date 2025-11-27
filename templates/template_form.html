@@ -496,6 +496,156 @@
 .info-box li {
     margin-bottom: 0.25rem;
 }
+
+/* ============================================================================
+   TYPE SELECTION GATE (New Templates)
+   ============================================================================ */
+.type-selection-gate {
+    background: var(--bg-secondary);
+    border: 2px solid var(--border);
+    border-radius: 12px;
+    padding: 2rem;
+    margin-bottom: 1.5rem;
+}
+
+.type-selection-header {
+    text-align: center;
+    margin-bottom: 1.5rem;
+}
+
+.type-selection-header h3 {
+    margin: 0 0 0.5rem 0;
+    color: var(--text-primary);
+    font-size: 1.25rem;
+}
+
+.type-selection-header p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.type-selection-options {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.type-option {
+    flex: 1;
+    cursor: pointer;
+}
+
+.type-option input[type="radio"] {
+    display: none;
+}
+
+.type-option-content {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    padding: 1.25rem;
+    background: var(--bg-tertiary);
+    border: 2px solid var(--border);
+    border-radius: 8px;
+    transition: all 0.2s;
+}
+
+.type-option:hover .type-option-content {
+    border-color: var(--primary);
+    background: var(--bg-secondary);
+}
+
+.type-option input[type="radio"]:checked + .type-option-content {
+    border-color: var(--primary);
+    background: rgba(99, 102, 241, 0.1);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+}
+
+.type-option-icon {
+    font-size: 2rem;
+    line-height: 1;
+}
+
+.type-option-info {
+    flex: 1;
+}
+
+.type-option-info strong {
+    display: block;
+    font-size: 1rem;
+    margin-bottom: 0.25rem;
+    color: var(--text-primary);
+}
+
+.type-option-info span {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    line-height: 1.4;
+}
+
+.type-selection-footer {
+    text-align: center;
+}
+
+.type-selection-footer .btn {
+    min-width: 200px;
+    padding: 0.75rem 2rem;
+    font-size: 1rem;
+}
+
+/* ============================================================================
+   TYPE BADGE (Existing Templates)
+   ============================================================================ */
+.type-badge-container {
+    margin-bottom: 1.5rem;
+}
+
+.type-badge {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+}
+
+.type-badge-team {
+    background: rgba(99, 102, 241, 0.1);
+    border-color: rgba(99, 102, 241, 0.3);
+}
+
+.type-badge-event {
+    background: rgba(16, 185, 129, 0.1);
+    border-color: rgba(16, 185, 129, 0.3);
+}
+
+.type-badge-icon {
+    font-size: 1.5rem;
+}
+
+.type-badge-info {
+    flex: 1;
+}
+
+.type-badge-info strong {
+    display: block;
+    font-size: 0.95rem;
+    color: var(--text-primary);
+}
+
+.type-badge-info span {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.type-badge-locked {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    padding: 0.25rem 0.5rem;
+    background: var(--bg-tertiary);
+    border-radius: 4px;
+}
 </style>
 
 <div class="card">
@@ -507,7 +657,66 @@
     </div>
 
     <form method="POST" id="template-form">
-        <div class="form-with-sidebar">
+        {% if template %}
+        <!-- EXISTING TEMPLATE: Show immutable type badge -->
+        <div class="type-badge-container">
+            <input type="hidden" name="template_type" value="{{ template.template_type or 'team' }}">
+            {% if template.template_type == 'event' %}
+                <div class="type-badge type-badge-event">
+                    <span class="type-badge-icon">📺</span>
+                    <div class="type-badge-info">
+                        <strong>Event Template</strong>
+                        <span>For event-based groups (Dispatcharr M3U streams)</span>
+                    </div>
+                    <span class="type-badge-locked">🔒 Locked</span>
+                </div>
+            {% else %}
+                <div class="type-badge type-badge-team">
+                    <span class="type-badge-icon">👤</span>
+                    <div class="type-badge-info">
+                        <strong>Team Template</strong>
+                        <span>For individual teams</span>
+                    </div>
+                    <span class="type-badge-locked">🔒 Locked</span>
+                </div>
+            {% endif %}
+        </div>
+        {% else %}
+        <!-- NEW TEMPLATE: Type selection gate -->
+        <div id="type-selection-gate" class="type-selection-gate">
+            <div class="type-selection-header">
+                <h3>Step 1: Choose Template Type</h3>
+                <p>This determines what fields are available and cannot be changed later.</p>
+            </div>
+            <div class="type-selection-options">
+                <label class="type-option" data-type="team">
+                    <input type="radio" name="template_type" value="team" checked>
+                    <div class="type-option-content">
+                        <span class="type-option-icon">👤</span>
+                        <div class="type-option-info">
+                            <strong>Team Template</strong>
+                            <span>For individual teams - generates pregame, game, postgame, and idle programs based on team schedules</span>
+                        </div>
+                    </div>
+                </label>
+                <label class="type-option" data-type="event">
+                    <input type="radio" name="template_type" value="event">
+                    <div class="type-option-content">
+                        <span class="type-option-icon">📺</span>
+                        <div class="type-option-info">
+                            <strong>Event Template</strong>
+                            <span>For Dispatcharr M3U groups - matches streams like "Giants @ Cowboys" to ESPN events</span>
+                        </div>
+                    </div>
+                </label>
+            </div>
+            <div class="type-selection-footer">
+                <button type="button" class="btn btn-primary" onclick="confirmTemplateType()">Continue →</button>
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="form-with-sidebar" id="main-form-content" {% if not template %}style="display: none;"{% endif %}>
             <!-- MAIN FORM CONTENT -->
             <div>
                 <!-- Tabbed Navigation -->
@@ -521,34 +730,12 @@
 
                 <!-- TAB 1: BASIC INFO -->
                 <div class="tab-content active" id="tab-basic">
-                    <!-- Name & Type Subsection -->
+                    <!-- Name Subsection -->
                     <fieldset>
-                        <legend><h3>Name & Type</h3></legend>
+                        <legend><h3>Template Name</h3></legend>
                         <div class="form-group">
-                            <label for="name">Template Name *</label>
-                            <input type="text" name="name" id="name" value="{{ template.name if template else '' }}" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="template_type">Template Type *</label>
-                            {% if template %}
-                                <input type="hidden" name="template_type" value="{{ template.template_type or 'team' }}">
-                                <div style="display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0.75rem; background: var(--bg-tertiary); border-radius: 4px; border: 1px solid var(--border);">
-                                    {% if template.template_type == 'event' %}
-                                        <span style="font-size: 1.25rem;">📺</span>
-                                        <span><strong>Event Template</strong> - For event-based groups (Dispatcharr M3U streams)</span>
-                                    {% else %}
-                                        <span style="font-size: 1.25rem;">👤</span>
-                                        <span><strong>Team Template</strong> - For individual teams</span>
-                                    {% endif %}
-                                    <span style="margin-left: auto; font-size: 0.75rem; color: var(--text-muted);">Type cannot be changed after creation</span>
-                                </div>
-                            {% else %}
-                                <select name="template_type" id="template_type" onchange="updateTemplateTypeDefaults()" required>
-                                    <option value="team" selected>👤 Team Template - For individual teams</option>
-                                    <option value="event">📺 Event Template - For event-based groups (Dispatcharr)</option>
-                                </select>
-                                <small class="help-text">Choose "Event Template" for Dispatcharr stream groups. Template type cannot be changed after creation.</small>
-                            {% endif %}
+                            <label for="name">Name *</label>
+                            <input type="text" name="name" id="name" value="{{ template.name if template else '' }}" required placeholder="e.g., NFL Default, NBA Premium">
                         </div>
                     </fieldset>
 
@@ -590,8 +777,33 @@
 
                 <!-- TAB 2: DEFAULTS -->
                 <div class="tab-content" id="tab-templates">
+                    <!-- Channel Name & Logo Fieldset (Event templates only - shown at top) -->
+                    <fieldset id="channel-logo-section" style="display: none;">
+                        <legend><h3>Channel Name & Logo</h3></legend>
+
+                        <div class="form-group">
+                            <label for="channel_name">Channel Name Template</label>
+                            <input type="text" name="channel_name" id="channel_name" class="template-field" placeholder="e.g., {away_team} @ {home_team}" value="{{ template.channel_name if template and template.channel_name else '{away_team} @ {home_team}' }}">
+                            <small class="help-text">Name for auto-created Dispatcharr channels. Variables: {home_team}, {away_team}, {league}, {sport}, {event_date}</small>
+                            <div class="inline-preview">
+                                <small>Preview:</small>
+                                <span id="preview-channel-name"></span>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="channel_logo_url">Channel Logo URL Template</label>
+                            <input type="text" name="channel_logo_url" id="channel_logo_url"
+                                   value="{{ template.channel_logo_url if template else '{home_team_logo}' }}"
+                                   placeholder="e.g., {home_team_logo} or static URL"
+                                   class="template-field"
+                                   style="font-family: monospace; font-size: 0.9rem;">
+                            <small class="help-text">URL for dynamically generated art (channel logo). Requires a running <a href="https://github.com/sethwv/game-thumbs" target="_blank" style="color: var(--accent);">game-thumbs</a> instance.</small>
+                        </div>
+                    </fieldset>
+
                     <!-- Title & Subtitle Fieldset -->
-                    <fieldset>
+                    <fieldset id="title-subtitle-section" style="margin-top: 1.5rem;">
                         <legend><h3>Title & Subtitle</h3></legend>
 
                         <div class="form-group">
@@ -613,12 +825,30 @@
                         </div>
                     </fieldset>
 
-                    <!-- Program Art Fieldset -->
-                    <fieldset style="margin-top: 1.5rem;">
+                    <!-- Event Program Art Fieldset (Event templates only - after Title & Subtitle) -->
+                    <fieldset id="event-program-art-section" style="display: none; margin-top: 1.5rem;">
                         <legend><h3>Program Art</h3></legend>
 
                         <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem;">
-                            Provide URL for dynamically generated program-level art. Variables must be available in Teamarr. Will require a running <a href="https://github.com/sethwv/game-thumbs" target="_blank" style="color: var(--accent);">game-thumbs</a> instance for art generation.
+                            URL for dynamically generated art (thumbnails in guide). Requires a running <a href="https://github.com/sethwv/game-thumbs" target="_blank" style="color: var(--accent);">game-thumbs</a> instance.
+                        </p>
+
+                        <div class="form-group">
+                            <label for="program_art_url_event">Program Art URL Template</label>
+                            <input type="text" name="program_art_url" id="program_art_url_event"
+                                   value="{{ template.program_art_url if template else '' }}"
+                                   placeholder="Optional. Leave blank to disable program art"
+                                   class="template-field"
+                                   style="font-family: monospace; font-size: 0.9rem;">
+                        </div>
+                    </fieldset>
+
+                    <!-- Program Art Fieldset (Team templates only) -->
+                    <fieldset id="program-art-section" style="margin-top: 1.5rem;">
+                        <legend><h3>Program Art</h3></legend>
+
+                        <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem;">
+                            URL for dynamically generated art. Variables must be available in Teamarr. Requires a running <a href="https://github.com/sethwv/game-thumbs" target="_blank" style="color: var(--accent);">game-thumbs</a> instance.
                         </p>
 
                         <div class="form-group">
@@ -654,10 +884,10 @@
 
                     <!-- Simple Description Field (Event templates - single description only) -->
                     <fieldset id="event-description-section" style="margin-top: 1.5rem; display: none;">
-                        <legend><h3>Program Description</h3></legend>
+                        <legend><h3>Event Description</h3></legend>
 
                         <div class="form-group">
-                            <label for="event_description">Description Template</label>
+                            <label for="event_description">Program Description</label>
                             <input type="text" name="event_description" id="event_description" class="template-field" placeholder="e.g., {away_team} vs {home_team} - {league} {sport}" value="{away_team} vs {home_team} - {league} {sport}">
                             <div class="inline-preview">
                                 <small>Preview:</small>
@@ -1239,6 +1469,11 @@ function updatePreviews() {
     const previewEventDesc = document.getElementById('preview-event-description');
     if (previewEventDesc) previewEventDesc.textContent = replaceVariables(eventDesc);
 
+    // Update inline preview for channel name (event templates)
+    const channelName = document.getElementById('channel_name')?.value || '';
+    const previewChannelName = document.getElementById('preview-channel-name');
+    if (previewChannelName) previewChannelName.textContent = replaceVariables(channelName);
+
     // Update inline previews for conditional descriptions
     conditions.forEach((condition, index) => {
         const input = document.getElementById(`cond_template_${index}`);
@@ -1343,11 +1578,40 @@ async function loadVariablesFromAPI() {
 // ============================================================================
 // TEMPLATE TYPE HANDLING
 // ============================================================================
-function updateTemplateTypeDefaults() {
-    const select = document.getElementById('template_type');
-    if (!select) return;
 
-    currentTemplateType = select.value;
+function confirmTemplateType() {
+    // Get selected type
+    const selectedType = document.querySelector('input[name="template_type"]:checked')?.value || 'team';
+    currentTemplateType = selectedType;
+
+    // Hide the type selection gate
+    const gate = document.getElementById('type-selection-gate');
+    if (gate) gate.style.display = 'none';
+
+    // Show the main form
+    const mainForm = document.getElementById('main-form-content');
+    if (mainForm) mainForm.style.display = '';
+
+    // Apply defaults for the selected type
+    updateTemplateTypeDefaults();
+
+    // Focus the name field
+    const nameField = document.getElementById('name');
+    if (nameField) nameField.focus();
+}
+
+function updateTemplateTypeDefaults() {
+    // Get template type from radio button (new) or hidden input (existing)
+    const radioChecked = document.querySelector('input[name="template_type"]:checked');
+    const hiddenInput = document.querySelector('input[name="template_type"][type="hidden"]');
+
+    if (radioChecked) {
+        currentTemplateType = radioChecked.value;
+    } else if (hiddenInput) {
+        currentTemplateType = hiddenInput.value;
+    } else {
+        return;
+    }
 
     // Update default values based on template type
     if (currentTemplateType === 'event') {
@@ -1380,8 +1644,12 @@ function updateTemplateTypeDefaults() {
 
         // Update postgame defaults
         const postgameTitle = document.getElementById('postgame_title');
+        const postgameDesc = document.getElementById('postgame_description');
         if (postgameTitle && postgameTitle.value === 'Postgame Recap') {
             postgameTitle.value = '{away_team} @ {home_team} Postgame';
+        }
+        if (postgameDesc && postgameDesc.value === '{team_name} {result_text.last} the {opponent.last} {final_score.last} {overtime_text.last}') {
+            postgameDesc.value = '{winner} defeated {loser}. Final: {event_result_abbrev}';
         }
 
         // Update idle defaults
@@ -1390,7 +1658,7 @@ function updateTemplateTypeDefaults() {
             idleTitle.value = '{league} Programming';
         }
     } else {
-        // Team template defaults (restore if changed)
+        // Team template defaults (restore if changed from event defaults)
         const titleField = document.getElementById('title_format');
         const subtitleField = document.getElementById('subtitle_template');
 
@@ -1404,6 +1672,32 @@ function updateTemplateTypeDefaults() {
         const firstFallbackTextarea = document.querySelector('textarea[name^="fallback_template_"]');
         if (firstFallbackTextarea && firstFallbackTextarea.value === '{away_team} vs {home_team} - {league} {sport}') {
             firstFallbackTextarea.value = '{team_name} faces {opponent} at {venue}';
+        }
+
+        // Restore pregame defaults
+        const pregameTitle = document.getElementById('pregame_title');
+        const pregameDesc = document.getElementById('pregame_description');
+        if (pregameTitle && pregameTitle.value === '{away_team} @ {home_team} Pregame') {
+            pregameTitle.value = 'Pregame Coverage';
+        }
+        if (pregameDesc && pregameDesc.value === '{away_team} takes on {home_team} at {game_time}') {
+            pregameDesc.value = '{team_name} plays {opponent} today at {game_time}';
+        }
+
+        // Restore postgame defaults
+        const postgameTitle = document.getElementById('postgame_title');
+        const postgameDesc = document.getElementById('postgame_description');
+        if (postgameTitle && postgameTitle.value === '{away_team} @ {home_team} Postgame') {
+            postgameTitle.value = 'Postgame Recap';
+        }
+        if (postgameDesc && postgameDesc.value === '{winner} defeated {loser}. Final: {event_result_abbrev}') {
+            postgameDesc.value = '{team_name} {result_text.last} the {opponent.last} {final_score.last} {overtime_text.last}';
+        }
+
+        // Restore idle defaults
+        const idleTitle = document.getElementById('idle_title');
+        if (idleTitle && idleTitle.value === '{league} Programming') {
+            idleTitle.value = '{team_name} Programming';
         }
     }
 
@@ -1419,6 +1713,10 @@ function updateTemplateTypeDefaults() {
     const idleDaySection = document.getElementById('idle-day-section');
     const teamDescriptionSection = document.getElementById('team-description-section');
     const eventDescriptionSection = document.getElementById('event-description-section');
+    const channelLogoSection = document.getElementById('channel-logo-section');
+    const programArtSection = document.getElementById('program-art-section');
+    const eventProgramArtSection = document.getElementById('event-program-art-section');
+    const titleSubtitleSection = document.getElementById('title-subtitle-section');
 
     if (currentTemplateType === 'event') {
         // Hide Conditions tab for event templates
@@ -1429,6 +1727,13 @@ function updateTemplateTypeDefaults() {
         // Hide team description (multiple fallbacks), show event description (single)
         if (teamDescriptionSection) teamDescriptionSection.style.display = 'none';
         if (eventDescriptionSection) eventDescriptionSection.style.display = '';
+        // Show Channel Name & Logo section (event only), hide team Program Art section
+        if (channelLogoSection) channelLogoSection.style.display = '';
+        if (programArtSection) programArtSection.style.display = 'none';
+        // Show event-specific Program Art section (after Title & Subtitle)
+        if (eventProgramArtSection) eventProgramArtSection.style.display = '';
+        // Remove top margin from Title & Subtitle since Channel Name & Logo is now first
+        if (titleSubtitleSection) titleSubtitleSection.style.marginTop = '1.5rem';
         // If currently on conditions tab, switch to basic
         if (conditionsTab && conditionsTab.classList.contains('active')) {
             document.querySelector('.tab-button[data-tab="basic"]').click();
@@ -1441,6 +1746,13 @@ function updateTemplateTypeDefaults() {
         // Show team description (multiple fallbacks), hide event description (single)
         if (teamDescriptionSection) teamDescriptionSection.style.display = '';
         if (eventDescriptionSection) eventDescriptionSection.style.display = 'none';
+        // Hide Channel Name & Logo section (event only), show team Program Art section
+        if (channelLogoSection) channelLogoSection.style.display = 'none';
+        if (programArtSection) programArtSection.style.display = '';
+        // Hide event-specific Program Art section
+        if (eventProgramArtSection) eventProgramArtSection.style.display = 'none';
+        // Remove top margin from Title & Subtitle since it's now first
+        if (titleSubtitleSection) titleSubtitleSection.style.marginTop = '0';
     }
 }
 

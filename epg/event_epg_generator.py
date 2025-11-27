@@ -133,11 +133,19 @@ class EventEPGGenerator:
 
             # Add channel if not already added
             if channel_id not in added_channels:
-                self._add_channel(tv, stream, event, group_info)
+                self._add_channel(tv, stream, event, group_info, settings, template)
                 added_channels.add(channel_id)
+
+            # Add pregame filler if enabled in template (00:00 to event start)
+            if template and template.get('pregame_enabled'):
+                self._add_pregame_programme(tv, stream, event, group_info, settings, template)
 
             # Add programme for the event
             self._add_programme(tv, stream, event, group_info, settings, template)
+
+            # Add postgame filler if enabled in template (event end to 23:59:59)
+            if template and template.get('postgame_enabled'):
+                self._add_postgame_programme(tv, stream, event, group_info, settings, template)
 
         # Convert to pretty XML
         xml_str = self._xmltv._prettify(tv)
@@ -155,7 +163,9 @@ class EventEPGGenerator:
         parent,
         stream: Dict,
         event: Dict,
-        group_info: Dict
+        group_info: Dict,
+        settings: Dict = None,
+        template: Dict = None
     ):
         """Add channel element for a stream."""
         import xml.etree.ElementTree as ET
@@ -163,15 +173,23 @@ class EventEPGGenerator:
         channel = ET.SubElement(parent, 'channel')
         channel.set('id', self._get_channel_id(stream))
 
-        # Display name - use stream name (from Dispatcharr)
+        # Display name - use template channel_name if available, else stream name
         display_name = ET.SubElement(channel, 'display-name')
-        display_name.text = stream.get('name', '')
+        if template and template.get('channel_name'):
+            epg_timezone = settings.get('epg_timezone', 'America/New_York') if settings else 'America/New_York'
+            template_ctx = build_event_context(event, stream, group_info, epg_timezone)
+            display_name.text = self._template_engine.resolve(template['channel_name'], template_ctx)
+        else:
+            display_name.text = stream.get('name', '')
 
-        # Icon - prefer team logo or stream logo
-        logo_url = self._get_best_logo(stream, event)
-        if logo_url:
-            icon = ET.SubElement(channel, 'icon')
-            icon.set('src', logo_url)
+        # Channel icon/logo - use template channel_logo_url if available
+        if template and template.get('channel_logo_url'):
+            epg_timezone = settings.get('epg_timezone', 'America/New_York') if settings else 'America/New_York'
+            template_ctx = build_event_context(event, stream, group_info, epg_timezone)
+            logo_url = self._template_engine.resolve(template['channel_logo_url'], template_ctx)
+            if logo_url:
+                icon = ET.SubElement(channel, 'icon')
+                icon.set('src', logo_url)
 
     def _add_programme(
         self,
@@ -208,43 +226,37 @@ class EventEPGGenerator:
         epg_timezone = settings.get('epg_timezone', 'America/New_York')
         template_ctx = build_event_context(event, stream, group_info, epg_timezone)
 
-        # Title - use template if available, else use stream name
+        # Title - from template (required)
         title = ET.SubElement(programme, 'title')
         title.set('lang', 'en')
         if template and template.get('title_format'):
             title.text = self._template_engine.resolve(template['title_format'], template_ctx)
         else:
-            title.text = stream.get('name', '')
+            # Minimal fallback - just team names
+            home = event.get('home_team', {}).get('name', '')
+            away = event.get('away_team', {}).get('name', '')
+            title.text = f"{away} @ {home}" if home and away else stream.get('name', '')
 
-        # Sub-title - use template if available, else build from event data
+        # Sub-title - from template only
         if template and template.get('subtitle_template'):
             subtitle_text = self._template_engine.resolve(template['subtitle_template'], template_ctx)
-        else:
-            subtitle_text = self._build_subtitle(event)
+            if subtitle_text:
+                sub_title = ET.SubElement(programme, 'sub-title')
+                sub_title.set('lang', 'en')
+                sub_title.text = subtitle_text
 
-        if subtitle_text:
-            sub_title = ET.SubElement(programme, 'sub-title')
-            sub_title.set('lang', 'en')
-            sub_title.text = subtitle_text
-
-        # Description - use template if available, else build from event data
+        # Description - from template only
         if template and template.get('description_options'):
-            # Use select_description for conditional descriptions
             desc_template = self._template_engine.select_description(
                 template['description_options'],
                 template_ctx
             )
             if desc_template:
                 desc_text = self._template_engine.resolve(desc_template, template_ctx)
-            else:
-                desc_text = self._build_description(event, group_info)
-        else:
-            desc_text = self._build_description(event, group_info)
-
-        if desc_text:
-            desc = ET.SubElement(programme, 'desc')
-            desc.set('lang', 'en')
-            desc.text = desc_text
+                if desc_text:
+                    desc = ET.SubElement(programme, 'desc')
+                    desc.set('lang', 'en')
+                    desc.text = desc_text
 
         # Categories - only from template
         self._add_categories(programme, template)
@@ -253,15 +265,12 @@ class EventEPGGenerator:
         date_elem = ET.SubElement(programme, 'date')
         date_elem.text = event_date.strftime('%Y%m%d')
 
-        # Icon - use template art URL if available, else use best logo
+        # Programme Icon/Art - from template only
         if template and template.get('program_art_url'):
             icon_url = self._template_engine.resolve(template['program_art_url'], template_ctx)
-        else:
-            icon_url = self._get_best_logo(stream, event)
-
-        if icon_url:
-            icon = ET.SubElement(programme, 'icon')
-            icon.set('src', icon_url)
+            if icon_url:
+                icon = ET.SubElement(programme, 'icon')
+                icon.set('src', icon_url)
 
         # Live/New flags based on status
         status = event.get('status', {})
@@ -287,71 +296,147 @@ class EventEPGGenerator:
             logger.warning(f"Could not parse date '{date_str}': {e}")
             return None
 
-    def _build_subtitle(self, event: Dict) -> Optional[str]:
-        """Build subtitle from venue and broadcast info."""
-        parts = []
+    def _add_pregame_programme(
+        self,
+        parent,
+        stream: Dict,
+        event: Dict,
+        group_info: Dict,
+        settings: Dict,
+        template: Dict
+    ):
+        """Add pregame filler programme (00:00 to event start)."""
+        import xml.etree.ElementTree as ET
+        from zoneinfo import ZoneInfo
 
-        # Venue
-        venue = event.get('venue', {})
-        venue_name = venue.get('name')
-        if venue_name:
-            venue_location = []
-            if venue.get('city'):
-                venue_location.append(venue['city'])
-            if venue.get('state'):
-                venue_location.append(venue['state'])
+        # Parse event date
+        event_date = self._parse_event_date(event.get('date'))
+        if not event_date:
+            return
 
-            if venue_location:
-                parts.append(f"{venue_name}, {', '.join(venue_location)}")
-            else:
-                parts.append(venue_name)
+        # Get user's timezone
+        epg_timezone = settings.get('epg_timezone', 'America/New_York')
+        try:
+            tz = ZoneInfo(epg_timezone)
+        except Exception:
+            tz = ZoneInfo('America/New_York')
 
-        # Broadcast networks
-        broadcasts = event.get('broadcasts', [])
-        if broadcasts:
-            parts.append(f"On: {', '.join(broadcasts[:3])}")
+        # Convert event time to user's timezone
+        event_local = event_date.astimezone(tz)
 
-        return ' | '.join(parts) if parts else None
+        # Calculate start of day (00:00) in user's timezone
+        day_start = event_local.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    def _build_description(self, event: Dict, group_info: Dict) -> str:
-        """Build rich description with game context."""
-        lines = []
+        # Don't generate pregame if event starts at midnight or day_start >= event_date
+        if day_start >= event_date:
+            return
 
-        # Team records
-        home = event.get('home_team', {})
-        away = event.get('away_team', {})
+        # Format times for XMLTV (convert back to UTC for XMLTV format)
+        start_time = self._xmltv._format_xmltv_time(day_start)
+        stop_time = self._xmltv._format_xmltv_time(event_date)
 
-        if home.get('name') and away.get('name'):
-            home_record = home.get('record', {}).get('summary', '')
-            away_record = away.get('record', {}).get('summary', '')
+        programme = ET.SubElement(parent, 'programme')
+        programme.set('start', start_time)
+        programme.set('stop', stop_time)
+        programme.set('channel', self._get_channel_id(stream))
 
-            if home_record and away_record:
-                lines.append(f"{away['name']} ({away_record}) at {home['name']} ({home_record})")
-            else:
-                lines.append(f"{away['name']} at {home['name']}")
+        # Build template context for variable resolution
+        template_ctx = build_event_context(event, stream, group_info, epg_timezone)
 
-        # Odds
-        odds = event.get('odds', {})
-        if odds:
-            odds_parts = []
-            if odds.get('spread'):
-                odds_parts.append(f"Spread: {odds['spread']}")
-            if odds.get('over_under'):
-                odds_parts.append(f"O/U: {odds['over_under']}")
-            if odds_parts:
-                lines.append(' | '.join(odds_parts))
+        # Title - use pregame_title from template
+        title = ET.SubElement(programme, 'title')
+        title.set('lang', 'en')
+        pregame_title = template.get('pregame_title', 'Pregame Coverage')
+        title.text = self._template_engine.resolve(pregame_title, template_ctx)
 
-        # Weather (outdoor venues)
-        weather = event.get('weather', {})
-        if weather and weather.get('display'):
-            lines.append(f"Weather: {weather['display']}")
+        # Description - use pregame_description from template
+        pregame_desc = template.get('pregame_description', '')
+        if pregame_desc:
+            desc_text = self._template_engine.resolve(pregame_desc, template_ctx)
+            if desc_text:
+                desc = ET.SubElement(programme, 'desc')
+                desc.set('lang', 'en')
+                desc.text = desc_text
 
-        # Status detail
-        status = event.get('status', {})
-        if status.get('detail'):
-            lines.append(status['detail'])
+        # Pregame art if available
+        if template.get('pregame_art_url'):
+            icon_url = self._template_engine.resolve(template['pregame_art_url'], template_ctx)
+            if icon_url:
+                icon = ET.SubElement(programme, 'icon')
+                icon.set('src', icon_url)
 
-        return '\n'.join(lines) if lines else f"{group_info.get('assigned_league', '').upper()} Game"
+    def _add_postgame_programme(
+        self,
+        parent,
+        stream: Dict,
+        event: Dict,
+        group_info: Dict,
+        settings: Dict,
+        template: Dict
+    ):
+        """Add postgame filler programme (event end to 23:59:59)."""
+        import xml.etree.ElementTree as ET
+        from zoneinfo import ZoneInfo
+
+        # Parse event date
+        event_date = self._parse_event_date(event.get('date'))
+        if not event_date:
+            return
+
+        # Get user's timezone
+        epg_timezone = settings.get('epg_timezone', 'America/New_York')
+        try:
+            tz = ZoneInfo(epg_timezone)
+        except Exception:
+            tz = ZoneInfo('America/New_York')
+
+        # Calculate event end time
+        duration_hours = self._get_event_duration(group_info, settings, template)
+        event_end = event_date + timedelta(hours=duration_hours)
+
+        # Convert event end to user's timezone
+        event_end_local = event_end.astimezone(tz)
+
+        # Calculate end of day (23:59:59) in user's timezone
+        day_end = event_end_local.replace(hour=23, minute=59, second=59, microsecond=0)
+
+        # Don't generate postgame if event ends at or after midnight
+        if event_end >= day_end:
+            return
+
+        # Format times for XMLTV
+        start_time = self._xmltv._format_xmltv_time(event_end)
+        stop_time = self._xmltv._format_xmltv_time(day_end)
+
+        programme = ET.SubElement(parent, 'programme')
+        programme.set('start', start_time)
+        programme.set('stop', stop_time)
+        programme.set('channel', self._get_channel_id(stream))
+
+        # Build template context for variable resolution
+        template_ctx = build_event_context(event, stream, group_info, epg_timezone)
+
+        # Title - use postgame_title from template
+        title = ET.SubElement(programme, 'title')
+        title.set('lang', 'en')
+        postgame_title = template.get('postgame_title', 'Postgame Recap')
+        title.text = self._template_engine.resolve(postgame_title, template_ctx)
+
+        # Description - use postgame_description from template
+        postgame_desc = template.get('postgame_description', '')
+        if postgame_desc:
+            desc_text = self._template_engine.resolve(postgame_desc, template_ctx)
+            if desc_text:
+                desc = ET.SubElement(programme, 'desc')
+                desc.set('lang', 'en')
+                desc.text = desc_text
+
+        # Postgame art if available
+        if template.get('postgame_art_url'):
+            icon_url = self._template_engine.resolve(template['postgame_art_url'], template_ctx)
+            if icon_url:
+                icon = ET.SubElement(programme, 'icon')
+                icon.set('src', icon_url)
 
     def _add_categories(self, programme, template: Optional[Dict]):
         """Add category elements from template only."""

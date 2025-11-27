@@ -40,7 +40,7 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="midnight_crossover_mode">Midnight Crossover Filler Type</label>
+                    <label for="midnight_crossover_mode">Midnight Crossover Filler Type <span class="text-muted" style="font-weight: normal; font-size: 0.8em;">(Team-based channels)</span></label>
                     <select id="midnight_crossover_mode" name="midnight_crossover_mode" class="form-control">
                         <option value="idle" {% if settings.midnight_crossover_mode == 'idle' or not settings.midnight_crossover_mode %}selected{% endif %}>Idle</option>
                         <option value="postgame" {% if settings.midnight_crossover_mode == 'postgame' %}selected{% endif %}>Postgame</option>

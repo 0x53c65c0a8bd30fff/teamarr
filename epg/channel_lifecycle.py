@@ -112,21 +112,42 @@ def should_create_channel(
         return False, f"Error: {e}"
 
 
+def get_sport_duration_hours(sport: str) -> float:
+    """
+    Get typical duration for a sport in hours.
+
+    These are conservative estimates including potential overtime/extra innings.
+    """
+    durations = {
+        'football': 4.0,      # NFL/CFB games ~3-3.5 hours + buffer
+        'basketball': 3.0,    # NBA/CBB games ~2-2.5 hours + buffer
+        'hockey': 3.0,        # NHL games ~2.5 hours + buffer
+        'baseball': 4.0,      # MLB games can go long with extra innings
+        'soccer': 2.5,        # 90 min + halftime + stoppage + buffer
+    }
+    return durations.get(sport.lower(), 3.5)  # Default 3.5 hours
+
+
 def calculate_delete_time(
     event: Dict,
     delete_timing: str,
-    timezone: str
+    timezone: str,
+    sport: str = None
 ) -> Optional[datetime]:
     """
     Calculate when a channel should be deleted based on event and timing setting.
+
+    Uses the actual event start time and sport duration to determine if the
+    event will cross midnight, then schedules deletion appropriately.
 
     Args:
         event: ESPN event data with 'date' field
         delete_timing: One of 'stream_removed', 'end_of_day', 'end_of_next_day', 'manual'
         timezone: Timezone for date calculation
+        sport: Sport type for duration calculation (e.g., 'basketball', 'football')
 
     Returns:
-        Datetime when channel should be deleted, or None for 'manual'/'stream_removed'
+        Datetime when channel should be deleted (at 23:59), or None for 'manual'/'stream_removed'
     """
     if delete_timing in ('manual', 'stream_removed'):
         return None
@@ -143,20 +164,36 @@ def calculate_delete_time(
 
         # Convert to local timezone
         tz = ZoneInfo(timezone)
-        event_local = event_dt.astimezone(tz)
-        event_date = event_local.date()
+        event_start = event_dt.astimezone(tz)
+        event_start_date = event_start.date()
+
+        # Calculate event end time based on sport duration
+        duration_hours = get_sport_duration_hours(sport) if sport else 3.5
+        event_end = event_start + timedelta(hours=duration_hours)
+        event_end_date = event_end.date()
+
+        # Check if event crosses midnight (ends on a different day than it started)
+        crosses_midnight = event_end_date > event_start_date
 
         if delete_timing == 'end_of_day':
-            # End of event day (midnight)
-            delete_date = event_date + timedelta(days=1)
+            # Delete at end of the day the event ENDS (not starts)
+            delete_date = event_end_date
         elif delete_timing == 'end_of_next_day':
-            # End of day after event
-            delete_date = event_date + timedelta(days=2)
+            # Delete at end of the day AFTER the event ends
+            delete_date = event_end_date + timedelta(days=1)
         else:
             return None
 
-        # Return as datetime at midnight in the timezone
-        return datetime.combine(delete_date, datetime.min.time()).replace(tzinfo=tz)
+        if crosses_midnight:
+            logger.debug(
+                f"Event starts {event_start.strftime('%m/%d %I:%M %p')}, "
+                f"ends ~{event_end.strftime('%m/%d %I:%M %p')} (crosses midnight)"
+            )
+
+        # Return as datetime at 23:59:59 on the delete date
+        from datetime import time
+        end_of_day = time(23, 59, 59)
+        return datetime.combine(delete_date, end_of_day).replace(tzinfo=tz)
 
     except Exception as e:
         logger.warning(f"Error calculating delete time: {e}")
@@ -229,6 +266,10 @@ class ChannelLifecycleManager:
             get_next_channel_number,
             create_managed_channel
         )
+        from epg.event_template_engine import EventTemplateEngine
+
+        # Create template engine for channel name resolution
+        template_engine = EventTemplateEngine()
 
         results = {
             'created': [],
@@ -241,6 +282,7 @@ class ChannelLifecycleManager:
         channel_start = group.get('channel_start')
         create_timing = group.get('channel_create_timing', 'day_of')
         delete_timing = group.get('channel_delete_timing', 'stream_removed')
+        sport = group.get('assigned_sport')
 
         # Check if group has channel management enabled
         if not channel_start:
@@ -292,17 +334,39 @@ class ChannelLifecycleManager:
                 })
                 continue
 
-            # Generate channel name
-            channel_name = generate_channel_name(event, template, timezone=self.timezone)
+            # Generate channel name using template
+            channel_name = generate_channel_name(
+                event,
+                template=template,
+                template_engine=template_engine,
+                timezone=self.timezone
+            )
+
+            # Generate and upload channel logo if template has channel_logo_url
+            logo_id = None
+            if template and template.get('channel_logo_url'):
+                from epg.event_template_engine import build_event_context
+                logo_ctx = build_event_context(event, stream, group, self.timezone)
+                logo_url = template_engine.resolve(template['channel_logo_url'], logo_ctx)
+
+                if logo_url:
+                    logo_name = f"{channel_name} Logo"
+                    logo_result = self.channel_api.upload_logo(logo_name, logo_url)
+                    if logo_result.get('success'):
+                        logo_id = logo_result.get('logo_id')
+                        logger.debug(f"Logo for '{channel_name}': {logo_result.get('status')}")
+                    else:
+                        logger.warning(f"Failed to upload logo for '{channel_name}': {logo_result.get('error')}")
 
             # Calculate scheduled delete time
-            delete_at = calculate_delete_time(event, delete_timing, self.timezone)
+            delete_at = calculate_delete_time(event, delete_timing, self.timezone, sport)
 
-            # Create channel in Dispatcharr (no tvg_id - EPG injected directly)
+            # Create channel in Dispatcharr
             create_result = self.channel_api.create_channel(
                 name=channel_name,
                 channel_number=channel_number,
-                stream_ids=[stream['id']]
+                stream_ids=[stream['id']],
+                logo_id=logo_id
             )
 
             if not create_result.get('success'):
@@ -475,6 +539,196 @@ class ChannelLifecycleManager:
                     'channel_id': channel['dispatcharr_channel_id'],
                     'error': delete_result.get('error')
                 })
+
+        return results
+
+    def update_existing_channels(
+        self,
+        matched_streams: List[Dict],
+        group: Dict
+    ) -> Dict[str, Any]:
+        """
+        Update existing managed channels with fresh event data.
+
+        This recalculates scheduled delete times based on current event info
+        and group settings, in case events were rescheduled or settings changed.
+
+        Args:
+            matched_streams: List of dicts with 'stream', 'teams', 'event' keys
+            group: Event EPG group configuration
+
+        Returns:
+            Dict with updated count and any errors
+        """
+        from database import (
+            get_managed_channel_by_event,
+            update_managed_channel
+        )
+
+        results = {
+            'updated': [],
+            'errors': []
+        }
+
+        delete_timing = group.get('channel_delete_timing', 'stream_removed')
+        sport = group.get('assigned_sport')
+
+        for matched in matched_streams:
+            event = matched['event']
+            espn_event_id = event.get('id')
+            if not espn_event_id:
+                continue
+
+            # Check if we have an existing channel for this event
+            existing = get_managed_channel_by_event(espn_event_id, group['id'])
+            if not existing:
+                continue
+
+            # Skip if already deleted
+            if existing.get('deleted_at'):
+                continue
+
+            # Recalculate scheduled delete time
+            new_delete_at = calculate_delete_time(event, delete_timing, self.timezone, sport)
+            old_delete_at = existing.get('scheduled_delete_at')
+
+            # Convert old_delete_at to compare (may be string from DB)
+            old_delete_str = old_delete_at if old_delete_at else None
+            new_delete_str = new_delete_at.isoformat() if new_delete_at else None
+
+            # Update if changed
+            if old_delete_str != new_delete_str:
+                try:
+                    update_managed_channel(
+                        existing['id'],
+                        {'scheduled_delete_at': new_delete_str}
+                    )
+                    results['updated'].append({
+                        'channel_id': existing['dispatcharr_channel_id'],
+                        'channel_name': existing['channel_name'],
+                        'old_delete_at': old_delete_str,
+                        'new_delete_at': new_delete_str
+                    })
+                    logger.debug(
+                        f"Updated delete time for channel '{existing['channel_name']}': "
+                        f"{old_delete_str} -> {new_delete_str}"
+                    )
+                except Exception as e:
+                    results['errors'].append({
+                        'channel_id': existing['dispatcharr_channel_id'],
+                        'error': str(e)
+                    })
+
+        if results['updated']:
+            logger.info(f"Updated scheduled delete times for {len(results['updated'])} channels")
+
+        return results
+
+    def sync_group_settings(self, group: Dict) -> Dict[str, Any]:
+        """
+        Sync all active channels in a group with current group settings.
+
+        This ensures that if the user changes delete_timing or other settings,
+        ALL existing channels for this group are updated accordingly.
+        Called during every EPG refresh to ensure settings changes are honored.
+
+        Args:
+            group: Event EPG group configuration
+
+        Returns:
+            Dict with updated count and any errors
+        """
+        from database import (
+            get_managed_channels_for_group,
+            update_managed_channel
+        )
+        from api.espn_client import ESPNClient
+
+        results = {
+            'updated': [],
+            'cleared': [],
+            'errors': []
+        }
+
+        delete_timing = group.get('channel_delete_timing', 'stream_removed')
+        sport = group.get('assigned_sport')
+
+        # Get all active (non-deleted) channels for this group
+        channels = get_managed_channels_for_group(group['id'])
+
+        if not channels:
+            return results
+
+        # For 'manual' or 'stream_removed' timing, clear any existing scheduled_delete_at
+        if delete_timing in ('manual', 'stream_removed'):
+            for channel in channels:
+                if channel.get('scheduled_delete_at'):
+                    try:
+                        update_managed_channel(
+                            channel['id'],
+                            {'scheduled_delete_at': None}
+                        )
+                        results['cleared'].append({
+                            'channel_id': channel['dispatcharr_channel_id'],
+                            'channel_name': channel['channel_name']
+                        })
+                        logger.debug(
+                            f"Cleared scheduled delete for '{channel['channel_name']}' "
+                            f"(group set to {delete_timing})"
+                        )
+                    except Exception as e:
+                        results['errors'].append({
+                            'channel_id': channel['dispatcharr_channel_id'],
+                            'error': str(e)
+                        })
+
+            if results['cleared']:
+                logger.info(
+                    f"Cleared scheduled delete times for {len(results['cleared'])} channels "
+                    f"(group delete_timing is now '{delete_timing}')"
+                )
+            return results
+
+        # For timed deletion, we need event data to recalculate
+        # Channels without event data will keep their current schedule
+        espn = ESPNClient()
+
+        for channel in channels:
+            espn_event_id = channel.get('espn_event_id')
+            if not espn_event_id:
+                continue
+
+            # Try to fetch current event data from ESPN
+            try:
+                event = espn.get_event(espn_event_id)
+                if not event:
+                    continue
+
+                # Recalculate scheduled delete time
+                new_delete_at = calculate_delete_time(event, delete_timing, self.timezone, sport)
+                old_delete_at = channel.get('scheduled_delete_at')
+
+                old_delete_str = old_delete_at if old_delete_at else None
+                new_delete_str = new_delete_at.isoformat() if new_delete_at else None
+
+                if old_delete_str != new_delete_str:
+                    update_managed_channel(
+                        channel['id'],
+                        {'scheduled_delete_at': new_delete_str}
+                    )
+                    results['updated'].append({
+                        'channel_id': channel['dispatcharr_channel_id'],
+                        'channel_name': channel['channel_name'],
+                        'old_delete_at': old_delete_str,
+                        'new_delete_at': new_delete_str
+                    })
+
+            except Exception as e:
+                logger.debug(f"Could not update channel {channel['channel_name']}: {e}")
+                continue
+
+        if results['updated']:
+            logger.info(f"Synced delete times for {len(results['updated'])} channels with group settings")
 
         return results
 

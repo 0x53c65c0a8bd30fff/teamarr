@@ -3,7 +3,7 @@ Teamarr - Dynamic EPG Generator for Sports Team Channels
 Flask web application for managing templates and teams
 """
 
-from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, flash, Response
+from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, flash, Response, stream_with_context
 import os
 import json
 import sys
@@ -25,7 +25,8 @@ from database import (
     # Event EPG functions
     get_all_aliases, get_aliases_for_league, get_alias, create_alias, update_alias, delete_alias,
     get_all_event_epg_groups, get_event_epg_group, get_event_epg_group_by_dispatcharr_id,
-    create_event_epg_group, update_event_epg_group, delete_event_epg_group, update_event_epg_group_stats
+    create_event_epg_group, update_event_epg_group, delete_event_epg_group,
+    update_event_epg_group_stats, update_event_epg_group_last_refresh
 )
 from api.espn_client import ESPNClient
 from epg.orchestrator import EPGOrchestrator
@@ -118,28 +119,392 @@ def inject_version():
 # SCHEDULER FUNCTIONS
 # =============================================================================
 
+# =============================================================================
+# CORE EPG GENERATION FUNCTIONS
+# =============================================================================
+
+def refresh_event_group_core(group, m3u_manager, wait_for_m3u=True):
+    """
+    Core function to refresh a single event EPG group.
+
+    This is the shared logic used by both manual API refresh and scheduled generation.
+
+    Args:
+        group: The event EPG group dict from database
+        m3u_manager: M3UAccountManager instance
+        wait_for_m3u: Whether to wait for M3U refresh to complete
+
+    Returns:
+        dict with keys: success, stream_count, matched_count, matched_streams,
+                       epg_result, channel_results, error
+    """
+    from epg.team_matcher import create_matcher
+    from epg.event_matcher import create_event_matcher
+    from epg.event_epg_generator import generate_event_epg
+    from epg.epg_consolidator import get_data_dir, after_event_epg_generation
+    from database import get_template, update_event_epg_group_stats
+
+    group_id = group['id']
+
+    try:
+        # Step 1: Refresh M3U data
+        app.logger.debug(f"Refreshing M3U account {group['dispatcharr_account_id']} for event EPG group {group_id}")
+
+        if wait_for_m3u:
+            refresh_result = m3u_manager.wait_for_refresh(group['dispatcharr_account_id'], timeout=120)
+            if not refresh_result.get('success'):
+                return {
+                    'success': False,
+                    'error': f"M3U refresh failed: {refresh_result.get('message')}",
+                    'step': 'refresh'
+                }
+        else:
+            m3u_manager.refresh_m3u_account(group['dispatcharr_account_id'])
+
+        # Step 2: Fetch streams
+        streams = m3u_manager.list_streams(group_name=group['group_name'])
+        app.logger.debug(f"Fetched {len(streams)} streams for group '{group['group_name']}'")
+
+        # Step 3: Match streams to ESPN events
+        team_matcher = create_matcher()
+        event_matcher = create_event_matcher()
+
+        matched_count = 0
+        matched_streams = []
+
+        for stream in streams:
+            try:
+                team_result = team_matcher.extract_teams(stream['name'], group['assigned_league'])
+
+                if team_result.get('matched'):
+                    event_result = event_matcher.find_and_enrich(
+                        team_result['away_team_id'],
+                        team_result['home_team_id'],
+                        group['assigned_league'],
+                        game_date=team_result.get('game_date'),
+                        game_time=team_result.get('game_time')
+                    )
+
+                    if event_result.get('found'):
+                        matched_count += 1
+                        matched_streams.append({
+                            'stream': stream,
+                            'teams': team_result,
+                            'event': event_result['event']
+                        })
+
+            except Exception as e:
+                app.logger.warning(f"Error matching stream '{stream['name']}': {e}")
+                continue
+
+        # Update stats
+        update_event_epg_group_stats(group_id, len(streams), matched_count)
+        app.logger.debug(f"Matched {matched_count}/{len(streams)} streams for group '{group['group_name']}'")
+
+        # Check if template is assigned
+        if not group.get('event_template_id'):
+            app.logger.debug(f"No template assigned to group '{group['group_name']}' - skipping EPG generation")
+            return {
+                'success': False,
+                'stream_count': len(streams),
+                'matched_count': matched_count,
+                'matched_streams': [],
+                'error': 'No event template assigned to this group'
+            }
+
+        # Step 4: Generate XMLTV
+        epg_result = None
+        channel_results = None
+
+        if matched_streams:
+            # Fetch settings and template BEFORE generating EPG
+            conn = get_connection()
+            settings = dict(conn.execute("SELECT * FROM settings WHERE id = 1").fetchone())
+            conn.close()
+
+            event_template = None
+            if group.get('event_template_id'):
+                event_template = get_template(group['event_template_id'])
+
+            epg_result = generate_event_epg(
+                matched_streams=matched_streams,
+                group_info=group,
+                save=True,
+                data_dir=get_data_dir(),
+                settings=settings,
+                template=event_template
+            )
+
+            if not epg_result.get('success'):
+                return {
+                    'success': False,
+                    'stream_count': len(streams),
+                    'matched_count': matched_count,
+                    'matched_streams': matched_streams,
+                    'error': f"EPG generation failed: {epg_result.get('error')}",
+                    'step': 'generate'
+                }
+
+            app.logger.debug(f"Generated event EPG: {epg_result.get('file_path')}")
+
+            # Consolidate all event EPGs
+            final_output_path = settings.get('epg_output_path', '/app/data/teamarr.xml')
+
+            consolidate_result = after_event_epg_generation(group_id, final_output_path)
+
+            # Step 5: Channel Lifecycle Management
+            if group.get('channel_start'):
+                from epg.channel_lifecycle import get_lifecycle_manager
+
+                lifecycle_mgr = get_lifecycle_manager()
+                if lifecycle_mgr:
+                    app.logger.debug(f"Processing channel lifecycle for group {group_id}")
+
+                    # First, sync ALL channels with current group settings
+                    # This ensures setting changes (e.g., delete_timing) are applied
+                    sync_results = lifecycle_mgr.sync_group_settings(group)
+                    if sync_results.get('cleared'):
+                        app.logger.debug(f"Cleared delete times for {len(sync_results['cleared'])} channels (settings changed)")
+                    if sync_results.get('updated'):
+                        app.logger.debug(f"Synced {len(sync_results['updated'])} channels with group settings")
+
+                    # Update scheduled delete times for matched streams (with fresh event data)
+                    update_results = lifecycle_mgr.update_existing_channels(
+                        matched_streams=matched_streams,
+                        group=group
+                    )
+                    if update_results['updated']:
+                        app.logger.debug(f"Updated {len(update_results['updated'])} channel delete times")
+
+                    # Create new channels for matched streams
+                    channel_results = lifecycle_mgr.process_matched_streams(
+                        matched_streams=matched_streams,
+                        group=group,
+                        template=event_template
+                    )
+
+                    if channel_results['created']:
+                        app.logger.debug(f"Created {len(channel_results['created'])} channels")
+
+                    # Clean up channels for removed streams
+                    stream_ids = [s['id'] for s in streams]
+                    cleanup_results = lifecycle_mgr.cleanup_deleted_streams(group, stream_ids)
+                    if cleanup_results['deleted']:
+                        app.logger.debug(f"Cleaned up {len(cleanup_results['deleted'])} removed channels")
+
+        # Cleanup removed streams even if no matched streams
+        # (don't process scheduled deletions here - that happens globally at end of EPG generation)
+        if not matched_streams and group.get('channel_start'):
+            from epg.channel_lifecycle import get_lifecycle_manager
+            lifecycle_mgr = get_lifecycle_manager()
+            if lifecycle_mgr:
+                stream_ids = [s['id'] for s in streams]
+                cleanup_results = lifecycle_mgr.cleanup_deleted_streams(group, stream_ids)
+                if cleanup_results['deleted']:
+                    app.logger.debug(f"Cleaned up {len(cleanup_results['deleted'])} removed channels (no matches)")
+
+        return {
+            'success': True,
+            'stream_count': len(streams),
+            'matched_count': matched_count,
+            'matched_streams': matched_streams,
+            'epg_result': epg_result,
+            'channel_results': channel_results,
+            'programmes_generated': epg_result.get('programmes', 0) if epg_result else 0
+        }
+
+    except Exception as e:
+        app.logger.error(f"Error refreshing event group '{group['group_name']}': {e}", exc_info=True)
+        return {
+            'success': False,
+            'error': str(e),
+            'step': 'unknown'
+        }
+
+
+def generate_all_epg(progress_callback=None, settings=None):
+    """
+    Unified EPG generation function for both scheduled and manual triggers.
+
+    This function:
+    1. Generates team-based EPG → saves to teams.xml via consolidator
+    2. Refreshes all enabled event groups with templates → saves to events.xml via consolidator
+    3. Returns combined statistics
+
+    Args:
+        progress_callback: Optional callable(status, message, percent) for progress updates
+        settings: Optional settings dict, will be fetched from DB if not provided
+
+    Returns:
+        dict with keys: success, team_stats, event_stats, error
+    """
+    from epg.epg_consolidator import after_team_epg_generation, get_data_dir
+
+    def report_progress(status, message, percent=None):
+        """Helper to report progress if callback provided"""
+        if progress_callback:
+            progress_callback(status, message, percent)
+
+    try:
+        # Get settings if not provided
+        if settings is None:
+            conn = get_connection()
+            settings_row = conn.execute("SELECT * FROM settings WHERE id = 1").fetchone()
+            conn.close()
+            if not settings_row:
+                return {'success': False, 'error': 'Settings not configured'}
+            settings = dict(settings_row)
+
+        days_ahead = settings.get('epg_days_ahead', 14)
+        epg_timezone = settings.get('default_timezone', 'America/New_York')
+        output_path = settings.get('epg_output_path', '/app/data/teamarr.xml')
+
+        # Initialize stats
+        team_stats = {
+            'count': 0,
+            'programmes': 0,
+            'events': 0,
+            'pregame': 0,
+            'postgame': 0,
+            'idle': 0,
+            'api_calls': 0
+        }
+        event_stats = {
+            'groups_refreshed': 0,
+            'streams_matched': 0,
+            'programmes': 0
+        }
+
+        # ============================================
+        # PHASE 1: Team-based EPG
+        # ============================================
+        report_progress('progress', 'Generating team-based EPG...', 10)
+
+        try:
+            result = epg_orchestrator.generate_epg(
+                days_ahead=days_ahead,
+                epg_timezone=epg_timezone,
+                settings=settings
+            )
+
+            if result and result.get('teams_list'):
+                team_stats['count'] = len(result['teams_list'])
+                team_stats['programmes'] = result['stats'].get('num_programmes', 0)
+                team_stats['events'] = result['stats'].get('num_events', 0)
+                team_stats['pregame'] = result['stats'].get('num_pregame', 0)
+                team_stats['postgame'] = result['stats'].get('num_postgame', 0)
+                team_stats['idle'] = result['stats'].get('num_idle', 0)
+                team_stats['api_calls'] = result.get('api_calls', 0)
+
+                # Generate team XMLTV and save via consolidator
+                report_progress('progress', f'Saving team EPG ({team_stats["count"]} teams)...', 45)
+
+                xml_content = xmltv_generator.generate(
+                    result['teams_list'],
+                    result['all_events'],
+                    settings
+                )
+
+                after_team_epg_generation(xml_content, output_path)
+                app.logger.info(f"📺 Team EPG: {team_stats['programmes']} programs from {team_stats['count']} teams")
+            else:
+                report_progress('progress', 'No active teams configured, skipping team EPG...', 45)
+                app.logger.debug("📺 Team EPG: No active teams configured")
+
+        except Exception as e:
+            app.logger.warning(f"Team EPG generation error: {e}")
+            # Continue to event groups even if team EPG fails
+
+        # ============================================
+        # PHASE 2: Event-based EPG
+        # ============================================
+        report_progress('progress', 'Processing event groups...', 50)
+
+        event_groups = get_all_event_epg_groups(enabled_only=True)
+        event_groups_with_templates = [g for g in event_groups if g.get('event_template_id')]
+
+        if event_groups_with_templates:
+            # Get M3U manager
+            m3u_manager = _get_m3u_manager()
+
+            if m3u_manager:
+                total_groups = len(event_groups_with_templates)
+
+                for idx, group in enumerate(event_groups_with_templates):
+                    # Calculate progress (50% to 90%)
+                    progress_pct = 50 + int(((idx + 1) / total_groups) * 40)
+                    report_progress('progress', f'Processing: {group["group_name"]}...', progress_pct)
+
+                    refresh_result = refresh_event_group_core(group, m3u_manager, wait_for_m3u=True)
+
+                    if refresh_result.get('success'):
+                        event_stats['groups_refreshed'] += 1
+                        event_stats['streams_matched'] += refresh_result.get('matched_count', 0)
+                        event_stats['programmes'] += refresh_result.get('programmes_generated', 0)
+
+                        # Update last refresh timestamp for this group
+                        update_event_epg_group_last_refresh(group['id'])
+            else:
+                app.logger.warning("M3U manager not available - skipping event groups")
+        else:
+            report_progress('progress', 'No event groups with templates configured...', 90)
+
+        # ============================================
+        # PHASE 3: Final consolidation
+        # ============================================
+        report_progress('progress', 'Consolidating EPG files...', 95)
+
+        # Check if we have anything
+        if team_stats['count'] == 0 and event_stats['groups_refreshed'] == 0:
+            return {
+                'success': False,
+                'error': 'No active teams or event groups with templates configured',
+                'team_stats': team_stats,
+                'event_stats': event_stats
+            }
+
+        return {
+            'success': True,
+            'team_stats': team_stats,
+            'event_stats': event_stats,
+            'output_path': output_path
+        }
+
+    except Exception as e:
+        app.logger.error(f"EPG generation error: {e}", exc_info=True)
+        return {
+            'success': False,
+            'error': str(e),
+            'team_stats': team_stats if 'team_stats' in dir() else {},
+            'event_stats': event_stats if 'event_stats' in dir() else {}
+        }
+
+
 def run_scheduled_generation():
-    """Run EPG generation (called by scheduler)"""
+    """Run EPG generation (called by scheduler) - uses unified generate_all_epg()"""
     try:
         app.logger.info(f"🕐 Scheduled EPG generation started at {datetime.now()}")
 
-        # Call the generate_epg endpoint internally using test client
         with app.app_context():
-            with app.test_client() as client:
-                # Make internal POST request to /generate endpoint with JSON header
-                response = client.post(
-                    '/generate',
-                    data={'days_ahead': ''},
-                    headers={'Accept': 'application/json'}
-                )
+            result = generate_all_epg()
 
-                if response.status_code == 200:
-                    result = response.get_json()
-                    app.logger.info(f"✅ Scheduled EPG generation completed: {result.get('num_programmes', 0)} programs from {result.get('num_channels', 0)} teams in {result.get('generation_time', 0):.2f}s")
+            if result.get('success'):
+                team_stats = result.get('team_stats', {})
+                event_stats = result.get('event_stats', {})
+
+                # Summary
+                parts = []
+                if team_stats.get('count', 0) > 0:
+                    parts.append(f"{team_stats['programmes']} team programs from {team_stats['count']} teams")
+                if event_stats.get('groups_refreshed', 0) > 0:
+                    parts.append(f"{event_stats['streams_matched']} event streams from {event_stats['groups_refreshed']} groups")
+
+                if parts:
+                    app.logger.info(f"✅ Scheduled EPG generation completed: {', '.join(parts)}")
                 else:
-                    error_data = response.get_json() if response.content_type == 'application/json' else {}
-                    error_msg = error_data.get('error', 'Unknown error')
-                    app.logger.error(f"❌ Scheduled EPG generation failed: {error_msg}")
+                    app.logger.info("✅ Scheduled EPG generation completed: No teams or event groups configured")
+            else:
+                app.logger.warning(f"⚠️ Scheduled EPG generation issue: {result.get('error', 'Unknown error')}")
 
     except Exception as e:
         app.logger.error(f"❌ Scheduler error: {e}", exc_info=True)
@@ -232,11 +597,22 @@ def index():
     conn = get_connection()
     cursor = conn.cursor()
 
-    # Get stats
+    # Get template stats
     template_count = cursor.execute("SELECT COUNT(*) FROM templates").fetchone()[0]
+    team_template_count = cursor.execute("SELECT COUNT(*) FROM templates WHERE template_type = 'team' OR template_type IS NULL").fetchone()[0]
+    event_template_count = cursor.execute("SELECT COUNT(*) FROM templates WHERE template_type = 'event'").fetchone()[0]
+
+    # Get team stats
     team_count = cursor.execute("SELECT COUNT(*) FROM teams").fetchone()[0]
     active_team_count = cursor.execute("SELECT COUNT(*) FROM teams WHERE active = 1").fetchone()[0]
     assigned_team_count = cursor.execute("SELECT COUNT(*) FROM teams WHERE template_id IS NOT NULL").fetchone()[0]
+
+    # Get event group stats
+    event_group_count = cursor.execute("SELECT COUNT(*) FROM event_epg_groups").fetchone()[0]
+    enabled_event_group_count = cursor.execute("SELECT COUNT(*) FROM event_epg_groups WHERE enabled = 1").fetchone()[0]
+    total_event_streams = cursor.execute("SELECT COALESCE(SUM(stream_count), 0) FROM event_epg_groups WHERE enabled = 1").fetchone()[0]
+    matched_event_streams = cursor.execute("SELECT COALESCE(SUM(matched_count), 0) FROM event_epg_groups WHERE enabled = 1").fetchone()[0]
+    managed_channel_count = cursor.execute("SELECT COUNT(*) FROM managed_channels WHERE deleted_at IS NULL").fetchone()[0]
 
     # Get timezone from settings
     settings_row = cursor.execute("SELECT default_timezone FROM settings WHERE id = 1").fetchone()
@@ -293,9 +669,16 @@ def index():
 
     return render_template('index.html',
         template_count=template_count,
+        team_template_count=team_template_count,
+        event_template_count=event_template_count,
         team_count=team_count,
         active_team_count=active_team_count,
         assigned_team_count=assigned_team_count,
+        event_group_count=event_group_count,
+        enabled_event_group_count=enabled_event_group_count,
+        total_event_streams=total_event_streams,
+        matched_event_streams=matched_event_streams,
+        managed_channel_count=managed_channel_count,
         latest_epg=latest_epg,
         epg_history=epg_history_formatted
     )
@@ -323,7 +706,9 @@ def templates_add():
     """Create a new template"""
     try:
         data = _extract_template_form_data(request.form)
-        app.logger.info(f"Creating new template: {data['name']}")
+        # Add template_type (only set on creation, immutable after)
+        data['template_type'] = request.form.get('template_type', 'team')
+        app.logger.info(f"Creating new template: {data['name']} (type: {data['template_type']})")
         app.logger.debug(f"Template data: {data}")
 
         template_id = create_template(data)
@@ -851,6 +1236,19 @@ def epg_management():
                          epg_url=epg_url)
 
 # =============================================================================
+# CHANNELS UI
+# =============================================================================
+
+@app.route('/channels')
+def channels_list():
+    """Managed channels page - shows channels created by Teamarr"""
+    conn = get_connection()
+    settings = dict(conn.execute("SELECT * FROM settings WHERE id = 1").fetchone())
+    conn.close()
+    epg_timezone = settings.get('default_timezone', 'America/New_York')
+    return render_template('channels.html', epg_timezone=epg_timezone)
+
+# =============================================================================
 # EVENT GROUPS UI
 # =============================================================================
 
@@ -860,23 +1258,59 @@ def event_groups_list():
     groups = get_all_event_epg_groups()
     aliases = get_all_aliases()
 
-    # Get leagues for alias modal dropdown
     conn = get_connection()
     cursor = conn.cursor()
+
+    # Get leagues for alias modal dropdown
     leagues = cursor.execute("""
         SELECT league_code, league_name, sport
         FROM league_config
         WHERE active = 1
         ORDER BY sport, league_name
     """).fetchall()
+    leagues = [dict(row) for row in leagues]
+
+    # Get league logos
+    cursor.execute("SELECT league_code, logo_url FROM league_config WHERE logo_url IS NOT NULL")
+    league_logos = {row['league_code']: row['logo_url'] for row in cursor.fetchall()}
+
+    # Get event templates for assignment dropdown
+    event_templates = cursor.execute("""
+        SELECT id, name FROM templates WHERE template_type = 'event' ORDER BY name
+    """).fetchall()
+    event_templates = [dict(row) for row in event_templates]
+
     conn.close()
 
-    leagues = [dict(row) for row in leagues]
+    # Backfill account_name for groups that don't have it
+    groups_needing_backfill = [g for g in groups if not g.get('account_name') and g.get('dispatcharr_account_id')]
+    if groups_needing_backfill:
+        try:
+            manager = _get_m3u_manager()
+            accounts = manager.list_m3u_accounts() if manager else []
+            account_map = {a['id']: a['name'] for a in accounts}
+
+            conn = get_connection()
+            cursor = conn.cursor()
+            for group in groups_needing_backfill:
+                account_name = account_map.get(group['dispatcharr_account_id'])
+                if account_name:
+                    cursor.execute(
+                        "UPDATE event_epg_groups SET account_name = ? WHERE id = ?",
+                        (account_name, group['id'])
+                    )
+                    group['account_name'] = account_name
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            app.logger.warning(f"Could not backfill account names: {e}")
 
     return render_template('event_epg.html',
                           groups=groups,
                           aliases=aliases,
-                          leagues=leagues)
+                          leagues=leagues,
+                          league_logos=league_logos,
+                          event_templates=event_templates)
 
 
 @app.route('/event-groups/import')
@@ -1082,8 +1516,17 @@ def generate_epg():
 
         if not result['teams_list']:
             app.logger.warning('No active teams with templates found')
-            flash('No active teams with templates configured', 'warning')
             conn.close()
+            # Return appropriate response based on request type
+            if request.headers.get('Accept') == 'application/json':
+                return jsonify({
+                    'success': True,
+                    'num_channels': 0,
+                    'num_programmes': 0,
+                    'generation_time': 0,
+                    'message': 'No active teams with templates configured'
+                })
+            flash('No active teams with templates configured', 'warning')
             return redirect(url_for('index'))
 
         # Generate XMLTV
@@ -1234,21 +1677,19 @@ def generate_epg():
 
 @app.route('/generate/stream')
 def generate_epg_stream():
-    """Stream EPG generation progress using Server-Sent Events"""
+    """Stream EPG generation progress using Server-Sent Events - handles both team and event EPG"""
     import threading
     import queue
-    import time
 
     def generate():
         """Generator function for SSE stream"""
         progress_queue = queue.Queue()
+        start_time = datetime.now()
 
         try:
             # Get settings
             conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM settings WHERE id = 1")
-            settings_row = cursor.fetchone()
+            settings_row = conn.execute("SELECT * FROM settings WHERE id = 1").fetchone()
             conn.close()
 
             if not settings_row:
@@ -1258,23 +1699,43 @@ def generate_epg_stream():
             settings = dict(settings_row)
             days_ahead = settings.get('epg_days_ahead', 14)
             epg_timezone = settings.get('default_timezone', 'America/New_York')
+            output_path = settings.get('epg_output_path', '/app/data/teamarr.xml')
 
             # Send initial progress
             yield f"data: {json.dumps({'status': 'starting', 'message': 'Initializing EPG generation...'})}\n\n"
 
+            # Track stats for both team and event EPG
+            team_count = 0
+            team_programmes = 0
+            team_events = 0
+            team_pregame = 0
+            team_postgame = 0
+            team_idle = 0
+            team_api_calls = 0
+            event_groups_refreshed = 0
+            event_streams_matched = 0
+            event_programmes = 0
+
+            # ============================================
+            # PHASE 1: Team-based EPG (with threaded progress)
+            # ============================================
+            yield f"data: {json.dumps({'status': 'progress', 'message': 'Generating team-based EPG...', 'percent': 10})}\n\n"
+
             # Progress callback that puts updates in queue
             def progress_callback(current, total, team_name, message):
+                # Scale team progress from 10% to 50%
+                base_percent = 10 + int((current / total) * 40) if total > 0 else 10
                 progress_data = {
                     'status': 'progress',
                     'current': current,
                     'total': total,
                     'team_name': team_name,
                     'message': message,
-                    'percent': int((current / total) * 100) if total > 0 else 0
+                    'percent': base_percent
                 }
                 progress_queue.put(progress_data)
 
-            # Run EPG generation in background thread
+            # Run team EPG generation in background thread
             result_container = {'result': None, 'error': None}
 
             def run_generation():
@@ -1316,36 +1777,108 @@ def generate_epg_stream():
 
             result = result_container['result']
 
-            if not result or not result['teams_list']:
-                yield f"data: {json.dumps({'status': 'error', 'message': 'No active teams with templates configured'})}\n\n"
+            # Process team EPG if we have teams
+            if result and result.get('teams_list'):
+                team_count = len(result['teams_list'])
+                team_programmes = result['stats'].get('num_programmes', 0)
+                team_events = result['stats'].get('num_events', 0)
+                team_pregame = result['stats'].get('num_pregame', 0)
+                team_postgame = result['stats'].get('num_postgame', 0)
+                team_idle = result['stats'].get('num_idle', 0)
+                team_api_calls = result.get('api_calls', 0)
+
+                # Generate team XMLTV and save via consolidator
+                yield f"data: {json.dumps({'status': 'progress', 'message': f'Saving team EPG ({team_count} teams)...', 'percent': 50})}\n\n"
+
+                xml_content = xmltv_generator.generate(
+                    result['teams_list'],
+                    result['all_events'],
+                    settings
+                )
+
+                # Save team EPG via consolidator
+                from epg.epg_consolidator import after_team_epg_generation
+                after_team_epg_generation(xml_content, output_path)
+            else:
+                yield f"data: {json.dumps({'status': 'progress', 'message': 'No active teams configured, skipping team EPG...', 'percent': 50})}\n\n"
+
+            # ============================================
+            # PHASE 2: Event-based EPG (using core function)
+            # ============================================
+            event_groups = get_all_event_epg_groups(enabled_only=True)
+            event_groups_with_templates = [g for g in event_groups if g.get('event_template_id')]
+
+            if event_groups_with_templates:
+                total_groups = len(event_groups_with_templates)
+                yield f"data: {json.dumps({'status': 'progress', 'message': f'Refreshing {total_groups} event group(s)...', 'percent': 55})}\n\n"
+
+                # Get M3U manager once for all groups
+                m3u_manager = _get_m3u_manager()
+
+                if m3u_manager:
+                    for idx, group in enumerate(event_groups_with_templates):
+                        try:
+                            # Calculate progress (55% to 90%)
+                            progress_pct = 55 + int(((idx + 1) / total_groups) * 35)
+                            group_name = group['group_name']
+                            yield f"data: {json.dumps({'status': 'progress', 'message': f'Processing: {group_name}...', 'percent': progress_pct, 'group_name': group_name, 'current': idx + 1, 'total': total_groups})}\n\n"
+
+                            # Use core refresh function directly (no HTTP overhead)
+                            refresh_result = refresh_event_group_core(group, m3u_manager, wait_for_m3u=True)
+
+                            if refresh_result.get('success'):
+                                event_groups_refreshed += 1
+                                event_streams_matched += refresh_result.get('matched_count', 0)
+                                event_programmes += refresh_result.get('programmes_generated', 0)
+                                update_event_epg_group_last_refresh(group['id'])
+
+                        except Exception as e:
+                            app.logger.warning(f"Error refreshing event group '{group['group_name']}': {e}")
+                else:
+                    yield f"data: {json.dumps({'status': 'progress', 'message': 'M3U manager not available, skipping event groups...', 'percent': 90})}\n\n"
+            else:
+                yield f"data: {json.dumps({'status': 'progress', 'message': 'No event groups with templates, skipping event EPG...', 'percent': 90})}\n\n"
+
+            # ============================================
+            # Check if we have anything to report
+            # ============================================
+            if team_count == 0 and event_groups_refreshed == 0:
+                yield f"data: {json.dumps({'status': 'error', 'message': 'No active teams or event groups with templates configured'})}\n\n"
                 return
 
-            # Generate XMLTV
-            yield f"data: {json.dumps({'status': 'finalizing', 'message': 'Generating XMLTV file...'})}\n\n"
+            # ============================================
+            # PHASE 3: Channel Lifecycle Processing
+            # ============================================
+            yield f"data: {json.dumps({'status': 'progress', 'message': 'Processing channel lifecycle...', 'percent': 92})}\n\n"
 
-            xml_content = xmltv_generator.generate(
-                result['teams_list'],
-                result['all_events'],
-                settings
-            )
+            # Process all scheduled channel deletions globally (once, not per-group)
+            from epg.channel_lifecycle import get_lifecycle_manager
+            lifecycle_mgr = get_lifecycle_manager()
+            channels_deleted = 0
+            if lifecycle_mgr:
+                deletion_results = lifecycle_mgr.process_scheduled_deletions()
+                channels_deleted = len(deletion_results.get('deleted', []))
+                if channels_deleted:
+                    app.logger.info(f"Processed {channels_deleted} scheduled channel deletions")
 
-            # Save to file
-            output_path = settings.get('epg_output_path', '/app/data/teamarr.xml')
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            # ============================================
+            # PHASE 4: Consolidation & Stats
+            # ============================================
+            yield f"data: {json.dumps({'status': 'progress', 'message': 'Consolidating EPG files...', 'percent': 95})}\n\n"
 
-            with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(xml_content)
+            # Calculate final stats
+            generation_time = (datetime.now() - start_time).total_seconds()
+            total_programmes = team_programmes + event_programmes
+            total_events = team_events + event_streams_matched
+            total_channels = team_count + event_streams_matched
 
             # Log to history
             conn = get_connection()
-            file_size = os.path.getsize(output_path)
-            file_hash = xmltv_generator.calculate_file_hash(xml_content)
-            generation_time = result['stats'].get('generation_time', 0)
-            total_programmes = result['stats'].get('num_programmes', 0)
-            total_events = result['stats'].get('num_events', 0)
-            num_pregame = result['stats'].get('num_pregame', 0)
-            num_postgame = result['stats'].get('num_postgame', 0)
-            num_idle = result['stats'].get('num_idle', 0)
+            file_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+            file_hash = ''
+            if os.path.exists(output_path):
+                with open(output_path, 'r') as f:
+                    file_hash = xmltv_generator.calculate_file_hash(f.read())
 
             cursor = conn.cursor()
             cursor.execute("""
@@ -1355,14 +1888,24 @@ def generate_epg_stream():
                     generation_time_seconds, api_calls_made, file_hash, status
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                output_path, file_size, len(result['teams_list']), total_programmes, total_events,
-                num_pregame, num_postgame, num_idle,
-                generation_time, result.get('api_calls', 0), file_hash, 'success'
+                output_path, file_size, total_channels, total_programmes, total_events,
+                team_pregame, team_postgame, team_idle,
+                generation_time, team_api_calls, file_hash, 'success'
             ))
             conn.commit()
             conn.close()
 
-            yield f"data: {json.dumps({'status': 'complete', 'message': f'EPG generated successfully! {total_programmes} programmes in {generation_time:.2f}s', 'programmes': total_programmes, 'time': f'{generation_time:.2f}s'})}\n\n"
+            # Build completion message
+            parts = []
+            if team_count > 0:
+                parts.append(f"{team_count} teams")
+            if event_groups_refreshed > 0:
+                parts.append(f"{event_groups_refreshed} event groups ({event_streams_matched} streams)")
+
+            message = f"EPG generated successfully! {' + '.join(parts)} in {generation_time:.2f}s"
+            if channels_deleted > 0:
+                message += f" ({channels_deleted} channels deleted)"
+            yield f"data: {json.dumps({'status': 'complete', 'message': message, 'programmes': total_programmes, 'time': f'{generation_time:.2f}s'})}\n\n"
 
         except Exception as e:
             app.logger.error(f"Error in EPG stream: {e}", exc_info=True)
@@ -2037,7 +2580,11 @@ def api_event_epg_groups_create():
             assigned_league=data['assigned_league'],
             assigned_sport=data['assigned_sport'],
             refresh_interval_minutes=data.get('refresh_interval_minutes', 60),
-            event_template_id=event_template_id
+            event_template_id=event_template_id,
+            account_name=data.get('account_name'),
+            channel_start=data.get('channel_start'),
+            channel_create_timing=data.get('channel_create_timing', 'day_of'),
+            channel_delete_timing=data.get('channel_delete_timing', 'stream_removed')
         )
 
         app.logger.info(f"Created event EPG group: {data['group_name']} (ID: {group_id})")
@@ -2134,11 +2681,8 @@ def api_event_epg_refresh(group_id):
     """
     Trigger refresh and EPG generation for an event EPG group.
 
-    This will:
-    1. Refresh M3U data from Dispatcharr
-    2. Fetch streams for the group
-    3. Match streams to ESPN events
-    4. Generate XMLTV file
+    Uses the shared refresh_event_group_core() function for consistency
+    with scheduled generation.
 
     Query params:
         wait_for_m3u: If 'true', wait for M3U refresh to complete (default: true)
@@ -2154,141 +2698,62 @@ def api_event_epg_refresh(group_id):
 
         wait_for_m3u = request.args.get('wait_for_m3u', 'true').lower() == 'true'
 
-        # Step 1: Refresh M3U data
-        app.logger.info(f"Refreshing M3U account {group['dispatcharr_account_id']} for event EPG group {group_id}")
+        app.logger.info(f"Refreshing event EPG group {group_id}: {group['group_name']}")
 
-        if wait_for_m3u:
-            refresh_result = manager.wait_for_refresh(group['dispatcharr_account_id'], timeout=120)
-            if not refresh_result.get('success'):
+        # Use the shared core function
+        result = refresh_event_group_core(group, manager, wait_for_m3u=wait_for_m3u)
+
+        # Build API response from core function result
+        stream_count = result.get('stream_count', 0)
+        matched_count = result.get('matched_count', 0)
+        match_rate = f"{(matched_count / stream_count * 100):.1f}%" if stream_count else "0%"
+
+        if not result.get('success'):
+            # Handle errors
+            if result.get('error') == 'No event template assigned to this group':
                 return jsonify({
-                    'error': f"M3U refresh failed: {refresh_result.get('message')}",
+                    'success': False,
+                    'group_id': group_id,
+                    'stream_count': stream_count,
+                    'matched_count': matched_count,
+                    'match_rate': match_rate,
+                    'message': 'No event template assigned to this group',
+                    'error': 'Cannot refresh: No template assigned. Please assign an event template first.'
+                })
+            elif result.get('step') == 'refresh':
+                return jsonify({
+                    'error': result.get('error'),
                     'step': 'refresh'
                 }), 500
-        else:
-            manager.refresh_m3u_account(group['dispatcharr_account_id'])
-
-        # Step 2: Fetch streams
-        streams = manager.list_streams(group_name=group['group_name'])
-        app.logger.info(f"Fetched {len(streams)} streams for group '{group['group_name']}'")
-
-        # Step 3: Match streams to ESPN events
-        from epg.team_matcher import create_matcher
-        from epg.event_matcher import create_event_matcher
-
-        team_matcher = create_matcher()
-        event_matcher = create_event_matcher()
-
-        matched_count = 0
-        matched_streams = []
-
-        for stream in streams:
-            try:
-                team_result = team_matcher.extract_teams(stream['name'], group['assigned_league'])
-
-                if team_result.get('matched'):
-                    event_result = event_matcher.find_and_enrich(
-                        team_result['away_team_id'],
-                        team_result['home_team_id'],
-                        group['assigned_league'],
-                        game_date=team_result.get('game_date'),
-                        game_time=team_result.get('game_time')
-                    )
-
-                    if event_result.get('found'):
-                        matched_count += 1
-                        matched_streams.append({
-                            'stream': stream,
-                            'teams': team_result,
-                            'event': event_result['event']
-                        })
-
-            except Exception as e:
-                app.logger.warning(f"Error matching stream '{stream['name']}': {e}")
-                continue
-
-        # Update stats
-        update_event_epg_group_stats(group_id, len(streams), matched_count)
-
-        app.logger.info(f"Matched {matched_count}/{len(streams)} streams for group '{group['group_name']}'")
-
-        # Step 4: Generate XMLTV first (so EPG is current when channels are created)
-        if matched_streams:
-            from epg.event_epg_generator import generate_event_epg
-
-            epg_result = generate_event_epg(
-                matched_streams=matched_streams,
-                group_info=group,
-                save=True,
-                data_dir=os.path.join(os.path.dirname(__file__), 'data')
-            )
-
-            if not epg_result.get('success'):
+            elif result.get('step') == 'generate':
                 return jsonify({
-                    'error': f"EPG generation failed: {epg_result.get('error')}",
+                    'error': result.get('error'),
                     'step': 'generate',
                     'matched_count': matched_count
                 }), 500
+            else:
+                return jsonify({
+                    'error': result.get('error', 'Unknown error'),
+                    'step': result.get('step', 'unknown')
+                }), 500
 
-            app.logger.info(f"Generated event EPG: {epg_result.get('file_path')}")
+        # Success case
+        if matched_count > 0:
+            # Update last refresh timestamp
+            update_event_epg_group_last_refresh(group_id)
 
-            # Consolidate all event EPGs and merge into final output
-            from epg.epg_consolidator import after_event_epg_generation
-
-            # Get final output path from settings
-            conn = get_connection()
-            settings = dict(conn.execute("SELECT * FROM settings WHERE id = 1").fetchone())
-            conn.close()
-            final_output_path = settings.get('epg_output_path', '/app/data/teamarr.xml')
-
-            consolidate_result = after_event_epg_generation(group_id, final_output_path)
-
-            # Step 5: Channel Lifecycle Management (after EPG is generated)
-            channel_results = None
-            if group.get('channel_start'):
-                from epg.channel_lifecycle import get_lifecycle_manager
-                from database import get_template
-
-                lifecycle_mgr = get_lifecycle_manager()
-                if lifecycle_mgr:
-                    app.logger.info(f"Processing channel lifecycle for group {group_id}")
-
-                    # Load event template if configured
-                    event_template = None
-                    if group.get('event_template_id'):
-                        event_template = get_template(group['event_template_id'])
-
-                    # Create channels for matched streams (EPG already generated, so set-epg will find programs)
-                    channel_results = lifecycle_mgr.process_matched_streams(
-                        matched_streams=matched_streams,
-                        group=group,
-                        template=event_template
-                    )
-
-                    if channel_results['created']:
-                        app.logger.info(f"Created {len(channel_results['created'])} channels")
-                    if channel_results['errors']:
-                        app.logger.warning(f"Channel creation errors: {channel_results['errors']}")
-
-                    # Clean up channels for removed streams
-                    stream_ids = [s['id'] for s in streams]
-                    cleanup_results = lifecycle_mgr.cleanup_deleted_streams(group, stream_ids)
-                    if cleanup_results['deleted']:
-                        app.logger.info(f"Cleaned up {len(cleanup_results['deleted'])} removed channels")
-
-                    # Process any scheduled deletions
-                    deletion_results = lifecycle_mgr.process_scheduled_deletions()
-                    if deletion_results['deleted']:
-                        app.logger.info(f"Processed {len(deletion_results['deleted'])} scheduled deletions")
+            epg_result = result.get('epg_result', {})
+            channel_results = result.get('channel_results')
 
             response = {
                 'success': True,
                 'group_id': group_id,
-                'stream_count': len(streams),
+                'stream_count': stream_count,
                 'matched_count': matched_count,
-                'match_rate': f"{(matched_count / len(streams) * 100):.1f}%" if streams else "0%",
-                'epg_file': epg_result.get('file_path'),
-                'combined_epg': consolidate_result.get('combined_path'),
-                'message': f"Generated EPG for {matched_count} of {len(streams)} streams"
+                'match_rate': match_rate,
+                'programmes_generated': result.get('programmes_generated', 0),
+                'epg_file': epg_result.get('file_path') if epg_result else None,
+                'message': f"Generated EPG for {matched_count} of {stream_count} streams"
             }
 
             # Add channel lifecycle info if available
@@ -2307,7 +2772,7 @@ def api_event_epg_refresh(group_id):
             return jsonify({
                 'success': True,
                 'group_id': group_id,
-                'stream_count': len(streams),
+                'stream_count': stream_count,
                 'matched_count': 0,
                 'match_rate': "0%",
                 'message': "No streams matched - EPG not generated"
@@ -2316,6 +2781,106 @@ def api_event_epg_refresh(group_id):
     except Exception as e:
         app.logger.error(f"Error refreshing event EPG group {group_id}: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/event-epg/refresh/<int:group_id>/stream', methods=['GET'])
+def api_event_epg_refresh_stream(group_id):
+    """
+    SSE endpoint for refreshing event EPG with progress updates.
+    Returns Server-Sent Events with progress messages.
+    """
+    def generate_progress():
+        try:
+            group = get_event_epg_group(group_id)
+            if not group:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Group not found'})}\n\n"
+                return
+
+            manager = _get_m3u_manager()
+            if not manager:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Dispatcharr not configured'})}\n\n"
+                return
+
+            # Step 1: Refresh M3U
+            yield f"data: {json.dumps({'type': 'progress', 'step': 1, 'total': 5, 'message': 'Refreshing M3U data...'})}\n\n"
+            refresh_result = manager.wait_for_refresh(group['dispatcharr_account_id'], timeout=120)
+            if not refresh_result.get('success'):
+                error_msg = f"M3U refresh failed: {refresh_result.get('message')}"
+                yield f"data: {json.dumps({'type': 'error', 'message': error_msg})}\n\n"
+                return
+
+            # Step 2: Fetch streams
+            yield f"data: {json.dumps({'type': 'progress', 'step': 2, 'total': 5, 'message': 'Fetching streams...'})}\n\n"
+            streams = manager.list_streams(group_name=group['group_name'])
+
+            # Step 3: Match to ESPN events
+            yield f"data: {json.dumps({'type': 'progress', 'step': 3, 'total': 5, 'message': f'Matching {len(streams)} streams to ESPN events...'})}\n\n"
+
+            from epg.team_matcher import create_matcher
+            from epg.event_matcher import create_event_matcher
+
+            team_matcher = create_matcher()
+            event_matcher = create_event_matcher()
+            matched_count = 0
+            matched_streams = []
+
+            for stream in streams:
+                try:
+                    team_result = team_matcher.extract_teams(stream['name'], group['assigned_league'])
+                    if team_result.get('matched'):
+                        event_result = event_matcher.find_and_enrich(
+                            team_result['away_team_id'],
+                            team_result['home_team_id'],
+                            group['assigned_league'],
+                            game_date=team_result.get('game_date'),
+                            game_time=team_result.get('game_time')
+                        )
+                        if event_result.get('found'):
+                            matched_count += 1
+                            matched_streams.append({
+                                'stream': stream,
+                                'teams': team_result,
+                                'event': event_result['event']
+                            })
+                except Exception:
+                    continue
+
+            update_event_epg_group_stats(group_id, len(streams), matched_count)
+
+            # Step 4: Generate EPG
+            yield f"data: {json.dumps({'type': 'progress', 'step': 4, 'total': 5, 'message': f'Generating EPG for {matched_count} matched streams...'})}\n\n"
+
+            if matched_streams:
+                from epg.event_epg_generator import generate_event_epg
+                from epg.epg_consolidator import get_data_dir
+                epg_result = generate_event_epg(
+                    matched_streams=matched_streams,
+                    group_info=group,
+                    save=True,
+                    data_dir=get_data_dir()  # Use consistent data dir (Docker or local)
+                )
+
+                # Step 5: Consolidate
+                yield f"data: {json.dumps({'type': 'progress', 'step': 5, 'total': 5, 'message': 'Consolidating EPG files...'})}\n\n"
+
+                from epg.epg_consolidator import after_event_epg_generation
+                conn = get_connection()
+                settings = dict(conn.execute("SELECT * FROM settings WHERE id = 1").fetchone())
+                conn.close()
+                final_output_path = settings.get('epg_output_path', '/app/data/teamarr.xml')
+                after_event_epg_generation(group_id, final_output_path)
+
+            # Complete
+            yield f"data: {json.dumps({'type': 'complete', 'stream_count': len(streams), 'matched_count': matched_count, 'message': f'Matched {matched_count}/{len(streams)} streams'})}\n\n"
+
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return Response(
+        stream_with_context(generate_progress()),
+        mimetype='text/event-stream',
+        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'}
+    )
 
 
 @app.route('/event-epg/<int:group_id>.xml', methods=['GET'])
@@ -2989,7 +3554,10 @@ def _extract_template_form_data(form):
         'idle_description_not_final': form.get('idle_description_not_final'),
 
         # Conditional descriptions
-        'description_options': form.get('description_options')  # JSON string
+        'description_options': form.get('description_options'),  # JSON string
+
+        # Event template channel naming
+        'channel_name': form.get('channel_name')
     }
 
     return data

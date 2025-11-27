@@ -29,7 +29,7 @@
                     <tr>
                         <th>Name</th>
                         <th>Type</th>
-                        <th>Teams Using</th>
+                        <th>Usage</th>
                         <th>Created</th>
                         <th>Actions</th>
                     </tr>
@@ -48,10 +48,18 @@
                                 {% endif %}
                             </td>
                             <td>
-                                {% if template.team_count > 0 %}
-                                    <span class="badge badge-success">{{ template.team_count }} team{% if template.team_count != 1 %}s{% endif %}</span>
+                                {% if template.template_type == 'event' %}
+                                    {% if template.group_count > 0 %}
+                                        <span class="badge badge-success">{{ template.group_count }} group{% if template.group_count != 1 %}s{% endif %}</span>
+                                    {% else %}
+                                        <span class="text-muted">None</span>
+                                    {% endif %}
                                 {% else %}
-                                    <span class="text-muted">No teams</span>
+                                    {% if template.team_count > 0 %}
+                                        <span class="badge badge-success">{{ template.team_count }} team{% if template.team_count != 1 %}s{% endif %}</span>
+                                    {% else %}
+                                        <span class="text-muted">None</span>
+                                    {% endif %}
                                 {% endif %}
                             </td>
                             <td class="text-muted">
@@ -71,7 +79,7 @@
                                         📥 Export
                                     </a>
                                     <form method="POST" action="{{ url_for('templates_delete', template_id=template.id) }}" style="display: inline;"
-                                          onsubmit="return confirmDelete('{{ template.name }}', {{ template.team_count }})">
+                                          onsubmit="return confirmDelete('{{ template.name }}', '{{ template.template_type }}', {{ template.team_count or 0 }}, {{ template.group_count or 0 }})">
                                         <button type="submit" class="btn btn-sm btn-danger" title="Delete">
                                             🗑️ Delete
                                         </button>
@@ -97,11 +105,13 @@
 </div>
 
 <script>
-function confirmDelete(templateName, teamCount) {
+function confirmDelete(templateName, templateType, teamCount, groupCount) {
     let message = `Are you sure you want to delete the template "${templateName}"?`;
 
-    if (teamCount > 0) {
+    if (templateType === 'team' && teamCount > 0) {
         message += `\n\n⚠️ Warning: ${teamCount} team(s) are currently using this template. They will become unassigned and won't generate EPG data until you assign them a new template.`;
+    } else if (templateType === 'event' && groupCount > 0) {
+        message += `\n\n⚠️ Warning: ${groupCount} event group(s) are currently using this template. They will become unassigned and won't generate EPG data until you assign them a new template.`;
     }
 
     return confirm(message);
@@ -169,7 +179,7 @@ function confirmDelete(templateName, teamCount) {
 
 .table th:nth-child(1) { width: auto; }      /* Name - flexible */
 .table th:nth-child(2) { width: 80px; }      /* Type */
-.table th:nth-child(3) { width: 140px; }     /* Teams Using */
+.table th:nth-child(3) { width: 140px; }     /* Usage */
 .table th:nth-child(4) { width: 120px; }     /* Created */
 .table th:nth-child(5) { width: 380px; }     /* Actions (4 buttons) */
 

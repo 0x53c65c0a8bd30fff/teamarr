@@ -150,8 +150,15 @@ function generateEPGWithProgress(buttonId = 'generate-epg-btn', returnTo = null)
             updateProgressNotification(progressNotification, data.message, 0, null);
         }
         else if (data.status === 'progress') {
-            const progressText = `Processing ${data.team_name} (${data.current}/${data.total})`;
-            updateProgressNotification(progressNotification, progressText, data.percent, data.team_name);
+            // Team progress uses team_name, event groups use group_name
+            let progressText;
+            const name = data.team_name || data.group_name;
+            if (name && data.current !== undefined && data.total !== undefined) {
+                progressText = `Processing ${name} (${data.current}/${data.total})`;
+            } else {
+                progressText = data.message || 'Processing...';
+            }
+            updateProgressNotification(progressNotification, progressText, data.percent, name);
         }
         else if (data.status === 'finalizing') {
             updateProgressNotification(progressNotification, data.message, 95, null);

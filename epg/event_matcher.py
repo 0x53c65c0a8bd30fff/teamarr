@@ -178,6 +178,7 @@ class EventMatcher:
 
         # Search for any game involving team2 (regardless of home/away)
         matching_events = []
+        skipped_completed_game = False  # Track if we skipped a completed game from previous day
 
         for event in schedule_data.get('events', []):
             try:
@@ -197,18 +198,10 @@ class EventMatcher:
                 if not competitions:
                     continue
 
-                # Skip completed/final games (we only want upcoming or in-progress)
+                # Check game status - allow completed games from today or later
                 status = competitions[0].get('status', {})
                 status_type = status.get('type', {})
-
-                # Check if game is completed
-                if status_type.get('completed', False):
-                    continue
-
-                # Also check status name for FINAL states
-                status_name = status_type.get('name', '').upper()
-                if 'FINAL' in status_name:
-                    continue
+                is_completed = status_type.get('completed', False) or 'FINAL' in status_type.get('name', '').upper()
 
                 competition = competitions[0]
                 competitors = competition.get('competitors', [])
@@ -222,20 +215,33 @@ class EventMatcher:
                 # Convert to strings for comparison
                 team_ids_in_game = [str(tid) for tid in team_ids_in_game if tid]
 
-                if str(team2_id) in team_ids_in_game:
-                    # Found a matching game!
-                    matching_events.append({
-                        'event': event,
-                        'event_date': event_date,
-                        'event_id': event.get('id')
-                    })
+                # Check if this game involves team2
+                if str(team2_id) not in team_ids_in_game:
+                    continue
+
+                # If completed, only include if game date is today or later
+                if is_completed:
+                    today = datetime.now(ZoneInfo('UTC')).date()
+                    if event_date.date() < today:
+                        skipped_completed_game = True  # Mark that we found but skipped a completed game
+                        continue  # Skip completed games from previous days
+
+                # Found a matching game!
+                matching_events.append({
+                    'event': event,
+                    'event_date': event_date,
+                    'event_id': event.get('id')
+                })
 
             except Exception as e:
                 logger.warning(f"Error parsing event: {e}")
                 continue
 
         if not matching_events:
-            result['reason'] = f'No game found between teams {team1_id} and {team2_id}'
+            if skipped_completed_game:
+                result['reason'] = 'Game completed (previous day)'
+            else:
+                result['reason'] = f'No game found between teams'
             return result
 
         # Sort by date

@@ -950,6 +950,100 @@ class ChannelManager:
 
         return {"success": False, "error": str(error_msg)}
 
+    def upload_logo(self, name: str, url: str) -> Dict[str, Any]:
+        """
+        Upload a logo to Dispatcharr.
+
+        If the logo URL already exists, finds and returns the existing logo_id.
+        Based on channelidentifiarr's logo upload pattern.
+
+        Args:
+            name: Logo name (e.g., "Celtics @ Lakers Logo")
+            url: URL of the logo image
+
+        Returns:
+            Result dict with:
+            - success: bool
+            - logo_id: int (if successful)
+            - error: str (if failed)
+            - status: 'created' | 'found_existing' | 'error'
+        """
+        if not url:
+            return {"success": False, "error": "No logo URL provided"}
+
+        # Try to create the logo (optimistic)
+        payload = {'name': name, 'url': url}
+        response = self.auth.post("/api/channels/logos/", payload)
+
+        if not response:
+            return {"success": False, "error": "Request failed - no response", "status": "error"}
+
+        if response.status_code in (200, 201):
+            logo_data = response.json()
+            return {
+                "success": True,
+                "logo_id": logo_data.get('id'),
+                "status": "created"
+            }
+
+        # Check if it's a duplicate collision
+        try:
+            error_data = response.json()
+            error_str = str(error_data).lower()
+            if 'already exists' in error_str or 'unique' in error_str:
+                # Logo URL already exists - search for it
+                existing_logo = self._find_logo_by_url(url)
+                if existing_logo:
+                    return {
+                        "success": True,
+                        "logo_id": existing_logo.get('id'),
+                        "status": "found_existing"
+                    }
+        except Exception:
+            pass
+
+        return {"success": False, "error": f"HTTP {response.status_code}", "status": "error"}
+
+    def _find_logo_by_url(self, url: str) -> Optional[Dict]:
+        """
+        Find an existing logo by its URL.
+
+        Args:
+            url: Logo URL to search for
+
+        Returns:
+            Logo dict or None if not found
+        """
+        # Fetch logos (paginated)
+        next_page = "/api/channels/logos/?page_size=100"
+
+        while next_page:
+            response = self.auth.get(next_page)
+            if not response or response.status_code != 200:
+                break
+
+            data = response.json()
+            if isinstance(data, dict) and 'results' in data:
+                logos = data['results']
+                next_url = data.get('next')
+                if next_url:
+                    # Extract just the path and query
+                    from urllib.parse import urlparse
+                    parsed = urlparse(next_url)
+                    next_page = f"{parsed.path}?{parsed.query}" if parsed.query else parsed.path
+                else:
+                    next_page = None
+            else:
+                # Assume it's a list
+                logos = data if isinstance(data, list) else []
+                next_page = None
+
+            for logo in logos:
+                if logo.get('url') == url:
+                    return logo
+
+        return None
+
     def test_connection(self) -> Dict[str, Any]:
         """Test connection to Dispatcharr."""
         try:

@@ -204,6 +204,30 @@ def run_migrations(conn):
 
     conn.commit()
 
+    # Channel name column for event templates (generates Dispatcharr channel names)
+    if 'channel_name' not in template_columns:
+        try:
+            cursor.execute("""
+                ALTER TABLE templates ADD COLUMN channel_name TEXT
+            """)
+            migrations_run += 1
+            print("  ✅ Added column: templates.channel_name")
+        except Exception as e:
+            print(f"  ⚠️ Could not add channel_name column: {e}")
+
+    # Channel logo URL column for event templates (sets Dispatcharr channel logo)
+    if 'channel_logo_url' not in template_columns:
+        try:
+            cursor.execute("""
+                ALTER TABLE templates ADD COLUMN channel_logo_url TEXT
+            """)
+            migrations_run += 1
+            print("  ✅ Added column: templates.channel_logo_url")
+        except Exception as e:
+            print(f"  ⚠️ Could not add channel_logo_url column: {e}")
+
+    conn.commit()
+
     # Event template assignment column (added for Event EPG groups)
     cursor.execute("PRAGMA table_info(event_epg_groups)")
     event_group_columns = {row[1] for row in cursor.fetchall()}
@@ -244,6 +268,17 @@ def run_migrations(conn):
                 print(f"  ✅ Added column: event_epg_groups.{col_name}")
             except Exception as e:
                 print(f"  ⚠️ Could not add column {col_name}: {e}")
+
+    # Account name column for event_epg_groups (for UI display)
+    cursor.execute("PRAGMA table_info(event_epg_groups)")
+    event_group_columns = {row[1] for row in cursor.fetchall()}
+    if 'account_name' not in event_group_columns:
+        try:
+            cursor.execute("ALTER TABLE event_epg_groups ADD COLUMN account_name TEXT")
+            migrations_run += 1
+            print("  ✅ Added column: event_epg_groups.account_name")
+        except Exception as e:
+            print(f"  ⚠️ Could not add account_name column: {e}")
 
     conn.commit()
 
@@ -385,16 +420,18 @@ def get_template(template_id: int) -> Optional[Dict[str, Any]]:
         conn.close()
 
 def get_all_templates() -> List[Dict[str, Any]]:
-    """Get all templates with team count"""
+    """Get all templates with team count and group count"""
     conn = get_connection()
     try:
         cursor = conn.cursor()
         results = cursor.execute("""
             SELECT
                 t.*,
-                COUNT(tm.id) as team_count
+                COUNT(DISTINCT tm.id) as team_count,
+                COUNT(DISTINCT eg.id) as group_count
             FROM templates t
             LEFT JOIN teams tm ON t.id = tm.template_id
+            LEFT JOIN event_epg_groups eg ON t.id = eg.event_template_id
             GROUP BY t.id
             ORDER BY t.name
         """).fetchall()
@@ -413,7 +450,7 @@ def create_template(data: Dict[str, Any]) -> int:
 
         # Extract fields (all are optional except name)
         fields = [
-            'name', 'sport', 'league',
+            'name', 'template_type', 'sport', 'league',
             'title_format', 'subtitle_template', 'program_art_url',
             'game_duration_mode', 'game_duration_override',
             'flags', 'categories', 'categories_apply_to',
@@ -423,7 +460,8 @@ def create_template(data: Dict[str, Any]) -> int:
             'postgame_conditional_enabled', 'postgame_description_final', 'postgame_description_not_final',
             'idle_enabled', 'idle_title', 'idle_subtitle', 'idle_description', 'idle_art_url',
             'idle_conditional_enabled', 'idle_description_final', 'idle_description_not_final',
-            'description_options'
+            'description_options',
+            'channel_name', 'channel_logo_url'
         ]
 
         # Build INSERT statement dynamically
@@ -908,14 +946,18 @@ def get_event_epg_group_by_dispatcharr_id(dispatcharr_group_id: int) -> Optional
 
 
 def get_all_event_epg_groups(enabled_only: bool = False) -> List[Dict[str, Any]]:
-    """Get all event EPG groups."""
+    """Get all event EPG groups with template names."""
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        query = "SELECT * FROM event_epg_groups"
+        query = """
+            SELECT g.*, t.name as event_template_name
+            FROM event_epg_groups g
+            LEFT JOIN templates t ON g.event_template_id = t.id
+        """
         if enabled_only:
-            query += " WHERE enabled = 1"
-        query += " ORDER BY group_name"
+            query += " WHERE g.enabled = 1"
+        query += " ORDER BY g.group_name"
 
         results = cursor.execute(query).fetchall()
         return [dict(row) for row in results]
@@ -931,13 +973,21 @@ def create_event_epg_group(
     assigned_sport: str,
     enabled: bool = True,
     refresh_interval_minutes: int = 60,
-    event_template_id: int = None
+    event_template_id: int = None,
+    account_name: str = None,
+    channel_start: int = None,
+    channel_create_timing: str = 'day_of',
+    channel_delete_timing: str = 'stream_removed'
 ) -> int:
     """
     Create a new event EPG group.
 
     Args:
         event_template_id: Optional template ID (must be an 'event' type template)
+        account_name: Optional M3U account name for display purposes
+        channel_start: Starting channel number for auto-created channels
+        channel_create_timing: When to create channels (day_of, day_before, 2_days_before, week_before)
+        channel_delete_timing: When to delete channels (stream_removed, end_of_day, end_of_next_day, manual)
 
     Returns:
         ID of created group
@@ -953,14 +1003,16 @@ def create_event_epg_group(
             INSERT INTO event_epg_groups
             (dispatcharr_group_id, dispatcharr_account_id, group_name,
              assigned_league, assigned_sport, enabled, refresh_interval_minutes,
-             event_template_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             event_template_id, account_name, channel_start, channel_create_timing,
+             channel_delete_timing)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 dispatcharr_group_id, dispatcharr_account_id, group_name,
                 assigned_league.lower(), assigned_sport.lower(),
                 1 if enabled else 0, refresh_interval_minutes,
-                event_template_id
+                event_template_id, account_name, channel_start,
+                channel_create_timing, channel_delete_timing
             )
         )
         conn.commit()
@@ -1028,6 +1080,25 @@ def update_event_epg_group_stats(
             WHERE id = ?
             """,
             (stream_count, matched_count, group_id)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def update_event_epg_group_last_refresh(group_id: int) -> bool:
+    """Update only the last_refresh timestamp (without changing stats)."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE event_epg_groups
+            SET last_refresh = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (group_id,)
         )
         conn.commit()
         return cursor.rowcount > 0
@@ -1104,14 +1175,20 @@ def get_managed_channels_for_group(group_id: int, include_deleted: bool = False)
 
 
 def get_all_managed_channels(include_deleted: bool = False) -> List[Dict[str, Any]]:
-    """Get all managed channels."""
+    """Get all managed channels with group info."""
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        query = "SELECT * FROM managed_channels"
+        query = """
+            SELECT mc.*,
+                   eg.group_name,
+                   eg.channel_delete_timing
+            FROM managed_channels mc
+            LEFT JOIN event_epg_groups eg ON mc.event_epg_group_id = eg.id
+        """
         if not include_deleted:
-            query += " WHERE deleted_at IS NULL"
-        query += " ORDER BY event_epg_group_id, channel_number"
+            query += " WHERE mc.deleted_at IS NULL"
+        query += " ORDER BY mc.event_epg_group_id, mc.channel_number"
 
         results = cursor.execute(query).fetchall()
         return [dict(row) for row in results]

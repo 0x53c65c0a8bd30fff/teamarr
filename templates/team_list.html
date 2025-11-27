@@ -60,22 +60,22 @@
                         <th style="width: 40px;">
                             <input type="checkbox" id="select-all" onchange="toggleSelectAll(this)">
                         </th>
-                        <th style="width: 20%;" class="sortable" onclick="sortTable('team')" data-sort="team">
+                        <th class="sortable" onclick="sortTable('team')" data-sort="team">
                             Team <span class="sort-indicator"></span>
                         </th>
-                        <th style="width: 10%;" class="sortable" onclick="sortTable('league')" data-sort="league">
+                        <th style="width: 70px;" class="sortable" onclick="sortTable('league')" data-sort="league">
                             League <span class="sort-indicator"></span>
                         </th>
-                        <th style="width: 10%;" class="sortable" onclick="sortTable('sport')" data-sort="sport">
+                        <th style="width: 70px;" class="sortable" onclick="sortTable('sport')" data-sort="sport">
                             Sport <span class="sort-indicator"></span>
                         </th>
-                        <th style="width: 12%;" class="sortable" onclick="sortTable('template')" data-sort="template">
+                        <th style="width: 120px;" class="sortable" onclick="sortTable('template')" data-sort="template">
                             Template <span class="sort-indicator"></span>
                         </th>
-                        <th style="width: 20%;" class="sortable" onclick="sortTable('channel')" data-sort="channel">
+                        <th style="width: 300px;" class="sortable" onclick="sortTable('channel')" data-sort="channel">
                             Channel ID <span class="sort-indicator"></span>
                         </th>
-                        <th style="width: 10%;" class="sortable" onclick="sortTable('status')" data-sort="status">
+                        <th style="width: 60px;" class="sortable" onclick="sortTable('status')" data-sort="status">
                             Status <span class="sort-indicator"></span>
                         </th>
                         <th style="width: 160px;">Actions</th>
@@ -85,7 +85,7 @@
                         <th></th>
                         <th>
                             <select id="filter-league" class="filter-dropdown" onchange="applyFilters()">
-                                <option value="">All Leagues</option>
+                                <option value="">All</option>
                                 {% for league in teams|map(attribute='league')|unique|sort %}
                                     <option value="{{ league }}">{{ league.upper() }}</option>
                                 {% endfor %}
@@ -93,7 +93,7 @@
                         </th>
                         <th>
                             <select id="filter-sport" class="filter-dropdown" onchange="applyFilters()">
-                                <option value="">All Sports</option>
+                                <option value="">All</option>
                                 {% for sport in teams|map(attribute='sport')|unique|sort %}
                                     <option value="{{ sport }}">{{ sport|title }}</option>
                                 {% endfor %}
@@ -101,7 +101,7 @@
                         </th>
                         <th>
                             <select id="filter-template" class="filter-dropdown" onchange="applyFilters()">
-                                <option value="">All Templates</option>
+                                <option value="">All</option>
                                 <option value="_unassigned">Unassigned</option>
                                 {% for template in templates %}
                                     <option value="{{ template.id }}">{{ template.name }}</option>
@@ -111,7 +111,7 @@
                         <th></th>
                         <th>
                             <select id="filter-status" class="filter-dropdown" onchange="applyFilters()">
-                                <option value="">All Status</option>
+                                <option value="">All</option>
                                 <option value="active">Active</option>
                                 <option value="inactive">Inactive</option>
                             </select>
@@ -681,7 +681,7 @@ async function bulkDelete() {
 
 /* Filter row in table header */
 .filter-row th {
-    padding: 0.125rem 1rem 0.5rem 1rem !important;
+    padding: 0.125rem 0.75rem 0.5rem 0.75rem !important;
     border-bottom: 2px solid var(--border);
 }
 
