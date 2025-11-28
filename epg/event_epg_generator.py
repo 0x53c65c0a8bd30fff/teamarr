@@ -196,7 +196,7 @@ class EventEPGGenerator:
         # Display name - use template channel_name if available, else stream name
         display_name = ET.SubElement(channel, 'display-name')
         if template and template.get('channel_name'):
-            epg_timezone = settings.get('epg_timezone', 'America/Detroit') if settings else 'America/Detroit'
+            epg_timezone = settings.get('default_timezone', 'America/Detroit') if settings else 'America/Detroit'
             template_ctx = build_event_context(event, stream, group_info, epg_timezone, settings)
             display_name.text = self._template_engine.resolve(template['channel_name'], template_ctx)
         else:
@@ -204,7 +204,7 @@ class EventEPGGenerator:
 
         # Channel icon/logo - use template channel_logo_url if available
         if template and template.get('channel_logo_url'):
-            epg_timezone = settings.get('epg_timezone', 'America/Detroit') if settings else 'America/Detroit'
+            epg_timezone = settings.get('default_timezone', 'America/Detroit') if settings else 'America/Detroit'
             template_ctx = build_event_context(event, stream, group_info, epg_timezone, settings)
             logo_url = self._template_engine.resolve(template['channel_logo_url'], template_ctx)
             if logo_url:
@@ -243,7 +243,7 @@ class EventEPGGenerator:
         programme.set('channel', self._get_channel_id(stream, event))
 
         # Build template context for variable resolution
-        epg_timezone = settings.get('epg_timezone', 'America/Detroit')
+        epg_timezone = settings.get('default_timezone', 'America/Detroit')
         template_ctx = build_event_context(event, stream, group_info, epg_timezone, settings)
 
         # Title - from template (required)
@@ -278,8 +278,8 @@ class EventEPGGenerator:
                     desc.set('lang', 'en')
                     desc.text = desc_text
 
-        # Categories - only from template
-        self._add_categories(programme, template)
+        # Categories - from template with variable resolution (respects categories_apply_to)
+        self._add_categories(programme, template, template_ctx, programme_type='game')
 
         # Date
         date_elem = ET.SubElement(programme, 'date')
@@ -292,15 +292,8 @@ class EventEPGGenerator:
                 icon = ET.SubElement(programme, 'icon')
                 icon.set('src', icon_url)
 
-        # Live/New flags based on status
-        status = event.get('status', {})
-        status_state = status.get('state', 'pre')
-
-        if status_state == 'pre':
-            ET.SubElement(programme, 'new')
-            ET.SubElement(programme, 'live')
-        elif status_state == 'in':
-            ET.SubElement(programme, 'live')
+        # Flags - from template (not hardcoded)
+        self._add_flags(programme, template)
 
     def _parse_event_date(self, date_str: str) -> Optional[datetime]:
         """Parse ESPN event date string to datetime."""
@@ -335,7 +328,7 @@ class EventEPGGenerator:
             return
 
         # Get user's timezone
-        epg_timezone = settings.get('epg_timezone', 'America/Detroit')
+        epg_timezone = settings.get('default_timezone', 'America/Detroit')
         try:
             tz = ZoneInfo(epg_timezone)
         except Exception:
@@ -369,6 +362,15 @@ class EventEPGGenerator:
         pregame_title = template.get('pregame_title', 'Pregame Coverage')
         title.text = self._template_engine.resolve(pregame_title, template_ctx)
 
+        # Sub-title - use pregame_subtitle from template
+        pregame_subtitle = template.get('pregame_subtitle', '')
+        if pregame_subtitle:
+            subtitle_text = self._template_engine.resolve(pregame_subtitle, template_ctx)
+            if subtitle_text:
+                sub_title = ET.SubElement(programme, 'sub-title')
+                sub_title.set('lang', 'en')
+                sub_title.text = subtitle_text
+
         # Description - use pregame_description from template
         pregame_desc = template.get('pregame_description', '')
         if pregame_desc:
@@ -384,6 +386,12 @@ class EventEPGGenerator:
             if icon_url:
                 icon = ET.SubElement(programme, 'icon')
                 icon.set('src', icon_url)
+
+        # Categories - respects categories_apply_to setting
+        self._add_categories(programme, template, template_ctx, programme_type='pregame')
+
+        # Flags - from template
+        self._add_flags(programme, template)
 
     def _add_postgame_programme(
         self,
@@ -404,7 +412,7 @@ class EventEPGGenerator:
             return
 
         # Get user's timezone
-        epg_timezone = settings.get('epg_timezone', 'America/Detroit')
+        epg_timezone = settings.get('default_timezone', 'America/Detroit')
         try:
             tz = ZoneInfo(epg_timezone)
         except Exception:
@@ -442,11 +450,20 @@ class EventEPGGenerator:
         postgame_title = template.get('postgame_title', 'Postgame Recap')
         title.text = self._template_engine.resolve(postgame_title, template_ctx)
 
-        # Description - use postgame_description from template
-        postgame_desc = template.get('postgame_description', '')
+        # Sub-title - use postgame_subtitle from template
+        postgame_subtitle = template.get('postgame_subtitle', '')
+        if postgame_subtitle:
+            subtitle_text = self._template_engine.resolve(postgame_subtitle, template_ctx)
+            if subtitle_text:
+                sub_title = ET.SubElement(programme, 'sub-title')
+                sub_title.set('lang', 'en')
+                sub_title.text = subtitle_text
+
+        # Description - supports conditional logic based on game final status
+        postgame_desc = self._get_postgame_description(template, event)
         if postgame_desc:
             desc_text = self._template_engine.resolve(postgame_desc, template_ctx)
-            if desc_text:
+            if desc_text and desc_text.strip():
                 desc = ET.SubElement(programme, 'desc')
                 desc.set('lang', 'en')
                 desc.text = desc_text
@@ -458,13 +475,41 @@ class EventEPGGenerator:
                 icon = ET.SubElement(programme, 'icon')
                 icon.set('src', icon_url)
 
-    def _add_categories(self, programme, template: Optional[Dict]):
-        """Add category elements from template only."""
+        # Categories - respects categories_apply_to setting
+        self._add_categories(programme, template, template_ctx, programme_type='postgame')
+
+        # Flags - from template
+        self._add_flags(programme, template)
+
+    def _add_categories(
+        self,
+        programme,
+        template: Optional[Dict],
+        context: Dict = None,
+        programme_type: str = 'game'
+    ):
+        """
+        Add category elements from template, resolving any variables.
+
+        Args:
+            programme: XML programme element
+            template: Template dict
+            context: Variable resolution context
+            programme_type: 'game', 'pregame', or 'postgame'
+        """
         import xml.etree.ElementTree as ET
         import json
 
         if not template:
             return
+
+        # Check categories_apply_to setting
+        apply_to = template.get('categories_apply_to', 'all')
+        if apply_to != 'all':
+            # Parse apply_to - can be comma-separated: "game,pregame" or single: "game"
+            allowed_types = [t.strip().lower() for t in apply_to.split(',')]
+            if programme_type not in allowed_types:
+                return  # Categories don't apply to this programme type
 
         # Get categories from template
         categories_json = template.get('categories')
@@ -485,9 +530,83 @@ class EventEPGGenerator:
 
         for cat in categories:
             if cat:  # Skip empty strings
+                # Resolve any template variables in category
+                resolved_cat = cat
+                if context and '{' in cat:
+                    resolved_cat = self._template_engine.resolve(cat, context)
                 cat_elem = ET.SubElement(programme, 'category')
                 cat_elem.set('lang', 'en')
-                cat_elem.text = cat
+                cat_elem.text = resolved_cat
+
+    def _get_postgame_description(self, template: Dict, event: Dict) -> str:
+        """
+        Get the appropriate postgame description based on conditional logic.
+
+        If postgame_conditional_enabled is True:
+        - Use postgame_description_final when game is finished
+        - Use postgame_description_not_final when game is not finished
+
+        Otherwise, use the standard postgame_description.
+
+        Args:
+            template: Template dict
+            event: ESPN event data
+
+        Returns:
+            Description template string
+        """
+        # Check if conditional logic is enabled
+        if template.get('postgame_conditional_enabled'):
+            status = event.get('status', {})
+            is_final = (
+                status.get('name', '') in ['STATUS_FINAL', 'Final'] or
+                status.get('state', '') == 'post'
+            )
+
+            if is_final:
+                return template.get('postgame_description_final', '')
+            else:
+                return template.get('postgame_description_not_final', '')
+
+        # Default: use standard postgame_description
+        return template.get('postgame_description', '')
+
+    def _add_flags(self, programme, template: Optional[Dict]):
+        """
+        Add programme flags (new, live) from template settings.
+
+        Flags are entirely template-controlled - no hardcoded logic.
+
+        Args:
+            programme: XML programme element
+            template: Template dict with 'flags' JSON field
+        """
+        import xml.etree.ElementTree as ET
+        import json
+
+        if not template:
+            return
+
+        flags = template.get('flags')
+        if not flags:
+            return
+
+        # Parse if JSON string
+        if isinstance(flags, str):
+            try:
+                flags = json.loads(flags)
+            except:
+                return
+
+        if not isinstance(flags, dict):
+            return
+
+        # Add flags based on template settings
+        if flags.get('new'):
+            ET.SubElement(programme, 'new')
+
+        if flags.get('live'):
+            ET.SubElement(programme, 'live')
 
     def _get_best_logo(self, stream: Dict, event: Dict) -> Optional[str]:
         """Get best available logo URL."""

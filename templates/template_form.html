@@ -2307,7 +2307,10 @@ function initFallbackDescriptions() {
 
 function initEventDescription() {
     // For event templates editing: populate event_description from first fallback
-    const templateType = document.getElementById('template_type')?.value || 'team';
+    // Check hidden input first (existing template), then radio button (new template)
+    const hiddenInput = document.querySelector('input[name="template_type"][type="hidden"]');
+    const radioInput = document.querySelector('input[name="template_type"]:checked');
+    const templateType = hiddenInput?.value || radioInput?.value || 'team';
     const eventDescInput = document.getElementById('event_description');
 
     if (templateType === 'event' && eventDescInput && fallbacks.length > 0) {

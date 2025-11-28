@@ -341,6 +341,8 @@ class EventMatcher:
             competitors = comp.get('competitors', [])
             for competitor in competitors:
                 team_data = competitor.get('team', {})
+                # ESPN uses 'records' (plural) in scoreboard API, 'record' (singular) in schedule API
+                records_data = competitor.get('records') or competitor.get('record') or []
                 team_info = {
                     'id': team_data.get('id'),
                     'name': team_data.get('displayName') or team_data.get('name'),
@@ -348,7 +350,7 @@ class EventMatcher:
                     'logo': team_data.get('logo'),
                     'color': team_data.get('color'),
                     'score': competitor.get('score'),
-                    'record': self._extract_record(competitor.get('records', []))
+                    'record': self._extract_record(records_data)
                 }
 
                 if competitor.get('homeAway') == 'home':

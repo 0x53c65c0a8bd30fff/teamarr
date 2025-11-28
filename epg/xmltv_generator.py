@@ -145,18 +145,10 @@ class XMLTVGenerator:
             icon = ET.SubElement(programme, 'icon')
             icon.set('src', icon_url)
 
-        # Flags (Gracenote: both new AND live for upcoming live events)
-        game_status = event.get('status', 'scheduled')
-
-        if game_status == 'scheduled':
-            if flags.get('new', True):
-                ET.SubElement(programme, 'new')
-            if flags.get('live', True):
-                # Gracenote includes <live/> for upcoming live events
-                ET.SubElement(programme, 'live')
-
-        elif game_status in ['in_progress', 'halftime']:
-            # Game currently happening
+        # Flags - entirely template-controlled (no hardcoded logic)
+        if flags.get('new', False):
+            ET.SubElement(programme, 'new')
+        if flags.get('live', False):
             ET.SubElement(programme, 'live')
 
     def _add_category(self, programme: ET.Element, category: str):

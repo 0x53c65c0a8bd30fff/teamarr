@@ -470,8 +470,10 @@ class TeamMatcher:
         text = re.sub(r'game\s*pass\s*\d*:?\s*', '', text, flags=re.I)
         text = re.sub(r'^on\s+', '', text, flags=re.I)
 
-        # Remove times (e.g., "8:15PM", "01:00 PM ET")
+        # Remove times (e.g., "8:15PM", "01:00 PM ET", "1pm", "8pm")
         text = re.sub(r'\d{1,2}:\d{2}\s*(am|pm|et|est|pt|pst|ct|cst|mt|mst)?\s*', '', text, flags=re.I)
+        # Also remove hour-only times like "1pm", "8pm", "12am"
+        text = re.sub(r'\b\d{1,2}\s*(am|pm)\b\s*', '', text, flags=re.I)
 
         # Remove dates (e.g., "11/23", "2025-11-26", "Nov 26")
         text = re.sub(r'\d{1,2}/\d{1,2}(/\d{2,4})?\s*', '', text)

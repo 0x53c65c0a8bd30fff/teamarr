@@ -3224,11 +3224,18 @@ def api_event_epg_refresh_stream(group_id):
                 # Settings already fetched at start of step 3
                 final_output_path = settings.get('epg_output_path', '/app/data/teamarr.xml')
 
+                # Get event template if assigned
+                event_template = None
+                if group.get('event_template_id'):
+                    event_template = get_template(group['event_template_id'])
+
                 epg_result = generate_event_epg(
                     matched_streams=matched_streams,
                     group_info=group,
                     save=True,
-                    data_dir=get_data_dir(final_output_path)  # Use settings path for consistency
+                    data_dir=get_data_dir(final_output_path),
+                    settings=settings,  # Include settings for timezone and time format
+                    template=event_template
                 )
 
                 # Step 5: Consolidate
