@@ -275,6 +275,7 @@ class TemplateEngine:
 
                 # Today vs Tonight based on 5pm cutoff in user's timezone
                 variables['today_tonight'] = 'tonight' if local_datetime.hour >= 17 else 'today'
+                variables['today_tonight_title'] = 'Tonight' if local_datetime.hour >= 17 else 'Today'
 
                 # Time until game
                 now = datetime.now(game_datetime.tzinfo)

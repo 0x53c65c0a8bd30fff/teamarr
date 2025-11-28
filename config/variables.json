@@ -1737,6 +1737,38 @@
       ]
     },
     {
+      "name": "today_tonight_title",
+      "description": "Returns 'Today' or 'Tonight' (title case) based on game time (5pm cutoff)",
+      "source": "`/schedule` → event.date",
+      "category": "📅 Schedule & Broadcast",
+      "icon": "🎮",
+      "type": "string",
+      "availability": "always",
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball",
+        "soccer"
+      ],
+      "available_suffixes": [
+        "base"
+      ],
+      "examples_by_sport": {
+        "NBA": "Tonight",
+        "NFL": "Today",
+        "MLB": "Tonight",
+        "NHL": "Tonight",
+        "NCAAM": "Tonight",
+        "NCAAF": "Today",
+        "Soccer": "Today"
+      },
+      "context": [
+        "team",
+        "event"
+      ]
+    },
+    {
       "name": "game_time",
       "description": "Game time (honors user's time format and timezone settings)",
       "source": "`/schedule` \u2192 event.date",

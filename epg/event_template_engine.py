@@ -192,6 +192,7 @@ class EventTemplateEngine:
                 variables['game_day'] = local_datetime.strftime('%A')
                 variables['game_day_short'] = local_datetime.strftime('%a')
                 variables['today_tonight'] = 'tonight' if local_datetime.hour >= 17 else 'today'
+                variables['today_tonight_title'] = 'Tonight' if local_datetime.hour >= 17 else 'Today'
 
             except Exception as e:
                 logger.debug(f"Could not parse event date: {e}")
