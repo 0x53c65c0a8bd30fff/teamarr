@@ -111,6 +111,18 @@ class EventTemplateEngine:
         else:
             variables['home_team_record'] = str(home_record) if home_record else ''
 
+        # Home team conference/division (from enrich_with_team_stats)
+        variables['home_team_college_conference'] = home_team.get('college_conference', '')
+        variables['home_team_college_conference_abbrev'] = home_team.get('college_conference_abbrev', '')
+        variables['home_team_pro_conference'] = home_team.get('pro_conference', '')
+        variables['home_team_pro_conference_abbrev'] = home_team.get('pro_conference_abbrev', '')
+        variables['home_team_pro_division'] = home_team.get('pro_division', '')
+
+        # Home team rank/seed/streak (from enrich_with_team_stats)
+        variables['home_team_rank'] = home_team.get('rank', '')
+        variables['home_team_seed'] = home_team.get('seed', '')
+        variables['home_team_streak'] = home_team.get('streak', '')
+
         # =====================================================================
         # AWAY TEAM VARIABLES
         # =====================================================================
@@ -127,6 +139,18 @@ class EventTemplateEngine:
             variables['away_team_record'] = away_record.get('summary', away_record.get('displayValue', ''))
         else:
             variables['away_team_record'] = str(away_record) if away_record else ''
+
+        # Away team conference/division (from enrich_with_team_stats)
+        variables['away_team_college_conference'] = away_team.get('college_conference', '')
+        variables['away_team_college_conference_abbrev'] = away_team.get('college_conference_abbrev', '')
+        variables['away_team_pro_conference'] = away_team.get('pro_conference', '')
+        variables['away_team_pro_conference_abbrev'] = away_team.get('pro_conference_abbrev', '')
+        variables['away_team_pro_division'] = away_team.get('pro_division', '')
+
+        # Away team rank/seed/streak (from enrich_with_team_stats)
+        variables['away_team_rank'] = away_team.get('rank', '')
+        variables['away_team_seed'] = away_team.get('seed', '')
+        variables['away_team_streak'] = away_team.get('streak', '')
 
         # =====================================================================
         # SPORT AND LEAGUE

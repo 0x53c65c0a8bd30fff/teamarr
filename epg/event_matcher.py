@@ -548,7 +548,186 @@ class EventMatcher:
             # Store updated competition
             event['competitions'] = [comp]
 
+            # Update broadcasts from scoreboard (more current than schedule)
+            if comp.get('broadcasts'):
+                broadcast_names = []
+                for broadcast in comp.get('broadcasts', []):
+                    names = broadcast.get('names', [])
+                    if names:
+                        broadcast_names.extend(names)
+                if broadcast_names:
+                    event['broadcasts'] = broadcast_names
+
         return event
+
+    def enrich_with_team_stats(
+        self,
+        event: Dict,
+        league: str
+    ) -> Dict[str, Any]:
+        """
+        Enrich event with current team stats from team endpoint.
+
+        This fills in data that the schedule/scoreboard APIs don't provide
+        for future games, including:
+        - Current team records (always accurate, not just for today's games)
+        - Team logos and colors
+        - Conference and division info
+        - Rank (college), playoff seed (pro), and streak
+
+        Args:
+            event: Event dict from find_event() or enrich_event_with_scoreboard()
+            league: League code
+
+        Returns:
+            Enriched event dict
+        """
+        config = self._get_league_config(league)
+        if not config:
+            return event
+
+        sport, api_league = self._parse_api_path(config['api_path'])
+        if not sport:
+            return event
+
+        # Determine if this is a college league
+        is_college = 'college' in league.lower()
+
+        # Enrich home team
+        home_team = event.get('home_team', {})
+        if home_team.get('id'):
+            home_id = home_team['id']
+
+            # Get team info (has logos, colors)
+            home_info = self.espn.get_team_info(sport, api_league, home_id)
+            if home_info and 'team' in home_info:
+                team_data = home_info['team']
+
+                # Fill in logo if missing
+                if not home_team.get('logo'):
+                    logos = team_data.get('logos', [])
+                    if logos:
+                        event['home_team']['logo'] = logos[0].get('href')
+
+                # Fill in color if missing
+                if not home_team.get('color'):
+                    event['home_team']['color'] = team_data.get('color')
+
+            # Get team stats (has current record, conference, division, rank, seed, streak)
+            home_stats = self.espn.get_team_stats(sport, api_league, home_id)
+            if home_stats:
+                # Always use team stats record - it's the current record
+                stats_record = home_stats.get('record', {})
+                if stats_record and stats_record.get('summary') and stats_record.get('summary') != '0-0':
+                    event['home_team']['record'] = stats_record
+                elif not event['home_team'].get('record') or event['home_team'].get('record', {}).get('summary') == '0-0':
+                    if stats_record:
+                        event['home_team']['record'] = stats_record
+
+                # Conference and division (stored separately for college vs pro)
+                if is_college:
+                    event['home_team']['college_conference'] = home_stats.get('conference_name', '')
+                    event['home_team']['college_conference_abbrev'] = home_stats.get('conference_abbrev', '')
+                    event['home_team']['pro_conference'] = ''
+                    event['home_team']['pro_conference_abbrev'] = ''
+                    event['home_team']['pro_division'] = ''
+                else:
+                    event['home_team']['college_conference'] = ''
+                    event['home_team']['college_conference_abbrev'] = ''
+                    event['home_team']['pro_conference'] = home_stats.get('conference_name', '')
+                    event['home_team']['pro_conference_abbrev'] = home_stats.get('conference_abbrev', '')
+                    event['home_team']['pro_division'] = home_stats.get('division_name', '')
+
+                # Rank (college - show #X if ranked top 25, else empty)
+                rank = home_stats.get('rank', 99)
+                event['home_team']['rank'] = f"#{rank}" if rank <= 25 else ''
+
+                # Playoff seed (pro - show ordinal if seeded)
+                seed = home_stats.get('playoff_seed', 0)
+                event['home_team']['seed'] = self._format_ordinal(seed) if seed > 0 else ''
+
+                # Streak (signed: positive=wins, negative=losses)
+                streak_count = home_stats.get('streak_count', 0)
+                if streak_count > 0:
+                    event['home_team']['streak'] = f"W{streak_count}"
+                elif streak_count < 0:
+                    event['home_team']['streak'] = f"L{abs(streak_count)}"
+                else:
+                    event['home_team']['streak'] = ''
+
+        # Enrich away team
+        away_team = event.get('away_team', {})
+        if away_team.get('id'):
+            away_id = away_team['id']
+
+            # Get team info (has logos, colors)
+            away_info = self.espn.get_team_info(sport, api_league, away_id)
+            if away_info and 'team' in away_info:
+                team_data = away_info['team']
+
+                # Fill in logo if missing
+                if not away_team.get('logo'):
+                    logos = team_data.get('logos', [])
+                    if logos:
+                        event['away_team']['logo'] = logos[0].get('href')
+
+                # Fill in color if missing
+                if not away_team.get('color'):
+                    event['away_team']['color'] = team_data.get('color')
+
+            # Get team stats (has current record, conference, division, rank, seed, streak)
+            away_stats = self.espn.get_team_stats(sport, api_league, away_id)
+            if away_stats:
+                # Always use team stats record - it's the current record
+                stats_record = away_stats.get('record', {})
+                if stats_record and stats_record.get('summary') and stats_record.get('summary') != '0-0':
+                    event['away_team']['record'] = stats_record
+                elif not event['away_team'].get('record') or event['away_team'].get('record', {}).get('summary') == '0-0':
+                    if stats_record:
+                        event['away_team']['record'] = stats_record
+
+                # Conference and division (stored separately for college vs pro)
+                if is_college:
+                    event['away_team']['college_conference'] = away_stats.get('conference_name', '')
+                    event['away_team']['college_conference_abbrev'] = away_stats.get('conference_abbrev', '')
+                    event['away_team']['pro_conference'] = ''
+                    event['away_team']['pro_conference_abbrev'] = ''
+                    event['away_team']['pro_division'] = ''
+                else:
+                    event['away_team']['college_conference'] = ''
+                    event['away_team']['college_conference_abbrev'] = ''
+                    event['away_team']['pro_conference'] = away_stats.get('conference_name', '')
+                    event['away_team']['pro_conference_abbrev'] = away_stats.get('conference_abbrev', '')
+                    event['away_team']['pro_division'] = away_stats.get('division_name', '')
+
+                # Rank (college - show #X if ranked top 25, else empty)
+                rank = away_stats.get('rank', 99)
+                event['away_team']['rank'] = f"#{rank}" if rank <= 25 else ''
+
+                # Playoff seed (pro - show ordinal if seeded)
+                seed = away_stats.get('playoff_seed', 0)
+                event['away_team']['seed'] = self._format_ordinal(seed) if seed > 0 else ''
+
+                # Streak (signed: positive=wins, negative=losses)
+                streak_count = away_stats.get('streak_count', 0)
+                if streak_count > 0:
+                    event['away_team']['streak'] = f"W{streak_count}"
+                elif streak_count < 0:
+                    event['away_team']['streak'] = f"L{abs(streak_count)}"
+                else:
+                    event['away_team']['streak'] = ''
+
+        return event
+
+    def _format_ordinal(self, n: int) -> str:
+        """Format number with ordinal suffix (1st, 2nd, 3rd, etc.)"""
+        if n == 0:
+            return ''
+        if 10 <= n % 100 <= 20:
+            suffix = 'th'
+        else:
+            suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
+        return f"{n}{suffix}"
 
     def find_and_enrich(
         self,
@@ -560,9 +739,17 @@ class EventMatcher:
         include_final_events: bool = False
     ) -> Dict[str, Any]:
         """
-        Find event and enrich with scoreboard data in one call.
+        Find event and enrich with scoreboard and team stats data.
 
-        Convenience method that combines find_event() and enrich_event_with_scoreboard().
+        Convenience method that combines:
+        1. find_event() - Find the event from schedule
+        2. enrich_event_with_scoreboard() - Add live data (odds, scores, broadcasts)
+        3. enrich_with_team_stats() - Add current records, logos, colors
+
+        The team stats enrichment is critical because:
+        - Schedule API doesn't have records for future games
+        - Scoreboard API only has records for today's games
+        - Team endpoint always has current records
 
         Args:
             team1_id: ESPN team ID for first team (from stream name)
@@ -583,7 +770,16 @@ class EventMatcher:
         )
 
         if result['found']:
+            # First enrich with scoreboard (live odds, scores, broadcasts)
             result['event'] = self.enrich_event_with_scoreboard(
+                result['event'],
+                league
+            )
+
+            # Then enrich with team stats (records, logos, colors)
+            # This is done AFTER scoreboard because team endpoint has the
+            # authoritative current record, not the scoreboard
+            result['event'] = self.enrich_with_team_stats(
                 result['event'],
                 league
             )

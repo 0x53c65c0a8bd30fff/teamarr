@@ -217,6 +217,36 @@ class TemplateEngine:
         variables['away_team_pro_conference_abbrev'] = away_team_stats.get('conference_abbrev', '') if not is_college else ''
         variables['away_team_pro_division'] = away_team_stats.get('division_name', '')
 
+        # Home/Away Team Rank, Seed, Streak (positional - based on which team is home/away)
+        # Rank (college - show #X if ranked top 25, else empty)
+        home_rank = home_team_stats.get('rank', 99)
+        away_rank = away_team_stats.get('rank', 99)
+        variables['home_team_rank'] = f"#{home_rank}" if home_rank <= 25 else ''
+        variables['away_team_rank'] = f"#{away_rank}" if away_rank <= 25 else ''
+
+        # Playoff seed (pro - show ordinal if seeded)
+        home_seed = home_team_stats.get('playoff_seed', 0)
+        away_seed = away_team_stats.get('playoff_seed', 0)
+        variables['home_team_seed'] = self._format_rank(home_seed) if home_seed > 0 else ''
+        variables['away_team_seed'] = self._format_rank(away_seed) if away_seed > 0 else ''
+
+        # Streak (formatted as W3 or L2)
+        home_streak = home_team_stats.get('streak_count', 0)
+        away_streak = away_team_stats.get('streak_count', 0)
+        if home_streak > 0:
+            variables['home_team_streak'] = f"W{home_streak}"
+        elif home_streak < 0:
+            variables['home_team_streak'] = f"L{abs(home_streak)}"
+        else:
+            variables['home_team_streak'] = ''
+
+        if away_streak > 0:
+            variables['away_team_streak'] = f"W{away_streak}"
+        elif away_streak < 0:
+            variables['away_team_streak'] = f"L{abs(away_streak)}"
+        else:
+            variables['away_team_streak'] = ''
+
         # =====================================================================
         # DATE & TIME
         # =====================================================================

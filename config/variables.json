@@ -4445,6 +4445,144 @@
       ]
     },
     {
+      "name": "home_team_rank",
+      "description": "Home team's national ranking (college sports only, empty if unranked)",
+      "category": "\ud83c\udfe0 Teams (Home/Away)",
+      "available_suffixes": [
+        "base",
+        "next",
+        "last"
+      ],
+      "examples_by_sport": {
+        "NBA": "",
+        "NFL": "",
+        "MLB": "",
+        "NHL": "",
+        "NCAAM": "#5",
+        "NCAAF": "#12",
+        "Soccer": ""
+      },
+      "context": [
+        "team",
+        "event"
+      ]
+    },
+    {
+      "name": "away_team_rank",
+      "description": "Away team's national ranking (college sports only, empty if unranked)",
+      "category": "\ud83c\udfe0 Teams (Home/Away)",
+      "available_suffixes": [
+        "base",
+        "next",
+        "last"
+      ],
+      "examples_by_sport": {
+        "NBA": "",
+        "NFL": "",
+        "MLB": "",
+        "NHL": "",
+        "NCAAM": "#8",
+        "NCAAF": "#3",
+        "Soccer": ""
+      },
+      "context": [
+        "team",
+        "event"
+      ]
+    },
+    {
+      "name": "home_team_seed",
+      "description": "Home team's playoff seed (pro sports, formatted as ordinal)",
+      "category": "\ud83c\udfe0 Teams (Home/Away)",
+      "available_suffixes": [
+        "base",
+        "next",
+        "last"
+      ],
+      "examples_by_sport": {
+        "NBA": "1st",
+        "NFL": "2nd",
+        "MLB": "3rd",
+        "NHL": "4th",
+        "NCAAM": "",
+        "NCAAF": "",
+        "Soccer": ""
+      },
+      "context": [
+        "team",
+        "event"
+      ]
+    },
+    {
+      "name": "away_team_seed",
+      "description": "Away team's playoff seed (pro sports, formatted as ordinal)",
+      "category": "\ud83c\udfe0 Teams (Home/Away)",
+      "available_suffixes": [
+        "base",
+        "next",
+        "last"
+      ],
+      "examples_by_sport": {
+        "NBA": "5th",
+        "NFL": "7th",
+        "MLB": "6th",
+        "NHL": "8th",
+        "NCAAM": "",
+        "NCAAF": "",
+        "Soccer": ""
+      },
+      "context": [
+        "team",
+        "event"
+      ]
+    },
+    {
+      "name": "home_team_streak",
+      "description": "Home team's current win/loss streak (formatted as W3 or L2)",
+      "category": "\ud83c\udfe0 Teams (Home/Away)",
+      "available_suffixes": [
+        "base",
+        "next",
+        "last"
+      ],
+      "examples_by_sport": {
+        "NBA": "W5",
+        "NFL": "L2",
+        "MLB": "W3",
+        "NHL": "L1",
+        "NCAAM": "W7",
+        "NCAAF": "W4",
+        "Soccer": "W2"
+      },
+      "context": [
+        "team",
+        "event"
+      ]
+    },
+    {
+      "name": "away_team_streak",
+      "description": "Away team's current win/loss streak (formatted as W3 or L2)",
+      "category": "\ud83c\udfe0 Teams (Home/Away)",
+      "available_suffixes": [
+        "base",
+        "next",
+        "last"
+      ],
+      "examples_by_sport": {
+        "NBA": "L3",
+        "NFL": "W4",
+        "MLB": "L1",
+        "NHL": "W6",
+        "NCAAM": "L2",
+        "NCAAF": "W8",
+        "Soccer": "L1"
+      },
+      "context": [
+        "team",
+        "event"
+      ]
+    },
+    {
       "name": "home_team_score",
       "description": "Home team's final score",
       "source": "ESPN API",
