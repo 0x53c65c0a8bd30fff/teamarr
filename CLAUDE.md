@@ -60,8 +60,8 @@ teamarr/
 |------|---------|
 | `ChannelLifecycleManager` | Coordinates channel creation/deletion with Dispatcharr |
 | `generate_event_tvg_id()` | Generates consistent tvg_id: `teamarr-event-{espn_event_id}` |
-| `should_create_channel()` | Checks both create timing AND delete threshold (prevents create-then-delete cycles) |
-| `calculate_delete_time()` | Scheduled deletion based on event END time (handles midnight crossings) |
+| `should_create_channel()` | Timing check based on event date |
+| `calculate_delete_time()` | Scheduled deletion calculation |
 | `get_sport_duration_hours()` | Sport-specific duration lookup |
 | `start_lifecycle_scheduler()` | Background scheduler for auto-deletion |
 
@@ -84,8 +84,6 @@ teamarr/
 | Item | Purpose |
 |------|---------|
 | `EventMatcher` | Finds upcoming/live ESPN events between detected teams |
-| `enrich_with_team_stats()` | Adds records, logos, conference, division, rank, seed, streak from team endpoint |
-| `find_and_enrich()` | Combined find + scoreboard + team stats enrichment |
 | `create_event_matcher()` | Factory function |
 
 ### api/dispatcharr_client.py
@@ -163,8 +161,6 @@ generate_all_epg()
 4. **Event matching skips completed games** - EPG is for upcoming/live only
 5. **Sport-specific durations** - Football 4h, Basketball 3h, Hockey 3h, etc.
 6. **Relative output paths** - `./data/teamarr.xml` works in Docker and local
-7. **Team stats enrichment** - Event data enriched from team endpoint for reliable records/logos
-8. **Stale stream handling** - Dangling provider streams silently ignored (no ESPN match = no channel)
 
 ---
 
@@ -201,44 +197,6 @@ Dashboard → Templates → Teams → Events → EPG → Channels → Settings
 
 ---
 
-## Event Data Enrichment
-
-Event-based EPG enriches data from multiple ESPN API sources:
-
-1. **Schedule API** - Base event data (date, teams, venue)
-2. **Scoreboard API** - Live data (odds, scores, broadcasts) - game day only
-3. **Team Stats API** - Current records, logos, conference, division, rank, seed, streak
-
-**Why team stats enrichment?** Schedule/scoreboard APIs don't have records for future games. Team endpoint always has current season stats.
-
-### Home/Away Team Variables (16 total)
-Conference/Division (10):
-- `home_team_college_conference`, `home_team_college_conference_abbrev`
-- `home_team_pro_conference`, `home_team_pro_conference_abbrev`, `home_team_pro_division`
-- Same 5 for `away_team_*`
-
-Rank/Seed/Streak (6):
-- `home_team_rank`, `away_team_rank` - College ranking (#5), empty if unranked
-- `home_team_seed`, `away_team_seed` - Pro playoff seed (1st, 2nd)
-- `home_team_streak`, `away_team_streak` - Current streak (W5, L2)
-
----
-
-## Stale Stream Handling
-
-Provider streams that don't match ESPN events are silently ignored:
-
-| Scenario | Result |
-|----------|--------|
-| Stream exists, no ESPN match | No channel created |
-| ESPN game completed (previous day) | Skipped, no match |
-| ESPN game completed (today) | Skipped by default |
-| Past delete threshold | Channel NOT created |
-
-Dangling streams (e.g., month-old World Series) cause no issues - they simply don't match.
-
----
-
 ## Future Work
 
 ### High Priority
@@ -246,6 +204,7 @@ Dangling streams (e.g., month-old World Series) cause no issues - they simply do
 - **EPG preview** - Preview generated EPG before committing
 
 ### Medium Priority
+- **More event template variables** - Venue, broadcast network, series info
 - **UI help text** - Contextual documentation in the interface
 
 ### Low Priority
