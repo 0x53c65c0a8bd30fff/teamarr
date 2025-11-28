@@ -132,16 +132,16 @@ def inject_globals():
 # CORE EPG GENERATION FUNCTIONS
 # =============================================================================
 
-def refresh_event_group_core(group, m3u_manager, wait_for_m3u=True):
+def refresh_event_group_core(group, m3u_manager):
     """
     Core function to refresh a single event EPG group.
 
     This is the shared logic used by both manual API refresh and scheduled generation.
+    Always waits for M3U refresh to complete before fetching streams.
 
     Args:
         group: The event EPG group dict from database
         m3u_manager: M3UAccountManager instance
-        wait_for_m3u: Whether to wait for M3U refresh to complete
 
     Returns:
         dict with keys: success, stream_count, matched_count, matched_streams,
@@ -162,19 +162,16 @@ def refresh_event_group_core(group, m3u_manager, wait_for_m3u=True):
     include_final_events = bool(settings.get('include_final_events', 0))
 
     try:
-        # Step 1: Refresh M3U data
+        # Step 1: Refresh M3U data and wait for completion
         app.logger.debug(f"Refreshing M3U account {group['dispatcharr_account_id']} for event EPG group {group_id}")
 
-        if wait_for_m3u:
-            refresh_result = m3u_manager.wait_for_refresh(group['dispatcharr_account_id'], timeout=120)
-            if not refresh_result.get('success'):
-                return {
-                    'success': False,
-                    'error': f"M3U refresh failed: {refresh_result.get('message')}",
-                    'step': 'refresh'
-                }
-        else:
-            m3u_manager.refresh_m3u_account(group['dispatcharr_account_id'])
+        refresh_result = m3u_manager.wait_for_refresh(group['dispatcharr_account_id'], timeout=120)
+        if not refresh_result.get('success'):
+            return {
+                'success': False,
+                'error': f"M3U refresh failed: {refresh_result.get('message')}",
+                'step': 'refresh'
+            }
 
         # Step 2: Fetch streams
         streams = m3u_manager.list_streams(group_name=group['group_name'])
@@ -479,7 +476,7 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
                         report_progress('progress', f'Processing: {group_name}...', progress_pct,
                                        group_name=group_name, current=idx + 1, total=total_groups)
 
-                        refresh_result = refresh_event_group_core(group, m3u_manager, wait_for_m3u=True)
+                        refresh_result = refresh_event_group_core(group, m3u_manager)
 
                         if refresh_result.get('success'):
                             event_stats['groups_refreshed'] += 1
@@ -2552,6 +2549,7 @@ def api_event_epg_dispatcharr_streams(group_id):
     Query params:
         limit: Max streams to return (default: 50)
         match: If 'true', attempt to match teams and find ESPN events
+        refresh: If 'true' (default), refresh M3U accounts before fetching streams
     """
     try:
         manager = _get_m3u_manager()
@@ -2560,6 +2558,23 @@ def api_event_epg_dispatcharr_streams(group_id):
 
         limit = request.args.get('limit', 50, type=int)
         do_match = request.args.get('match', 'false').lower() == 'true'
+        do_refresh = request.args.get('refresh', 'true').lower() == 'true'
+
+        # First get group info to find associated M3U accounts
+        groups = manager.list_channel_groups()
+        group = next((g for g in groups if g.get('id') == group_id), None)
+        if not group:
+            return jsonify({'error': 'Group not found'}), 404
+
+        # Refresh M3U accounts associated with this group before fetching streams
+        if do_refresh:
+            m3u_accounts = group.get('m3u_accounts', [])
+            for account_id in m3u_accounts:
+                app.logger.debug(f"Refreshing M3U account {account_id} before fetching streams")
+                refresh_result = manager.wait_for_refresh(account_id, timeout=120)
+                if not refresh_result.get('success'):
+                    app.logger.warning(f"M3U refresh for account {account_id} failed: {refresh_result.get('message')}")
+                    # Continue anyway - partial data is better than none
 
         # Get group info and streams
         result = manager.get_group_with_streams(group_id, stream_limit=limit)
@@ -3036,10 +3051,7 @@ def api_event_epg_refresh(group_id):
     Trigger refresh and EPG generation for an event EPG group.
 
     Uses the shared refresh_event_group_core() function for consistency
-    with scheduled generation.
-
-    Query params:
-        wait_for_m3u: If 'true', wait for M3U refresh to complete (default: true)
+    with scheduled generation. Always waits for M3U refresh to complete.
     """
     try:
         group = get_event_epg_group(group_id)
@@ -3050,12 +3062,10 @@ def api_event_epg_refresh(group_id):
         if not manager:
             return jsonify({'error': 'Dispatcharr credentials not configured'}), 400
 
-        wait_for_m3u = request.args.get('wait_for_m3u', 'true').lower() == 'true'
-
         app.logger.info(f"Refreshing event EPG group {group_id}: {group['group_name']}")
 
         # Use the shared core function
-        result = refresh_event_group_core(group, manager, wait_for_m3u=wait_for_m3u)
+        result = refresh_event_group_core(group, manager)
 
         # Build API response from core function result
         stream_count = result.get('stream_count', 0)
