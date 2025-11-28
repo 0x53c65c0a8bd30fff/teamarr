@@ -2549,7 +2549,6 @@ def api_event_epg_dispatcharr_streams(group_id):
     Query params:
         limit: Max streams to return (default: 50)
         match: If 'true', attempt to match teams and find ESPN events
-        refresh: If 'true' (default), refresh M3U accounts before fetching streams
     """
     try:
         manager = _get_m3u_manager()
@@ -2558,31 +2557,6 @@ def api_event_epg_dispatcharr_streams(group_id):
 
         limit = request.args.get('limit', 50, type=int)
         do_match = request.args.get('match', 'false').lower() == 'true'
-        do_refresh = request.args.get('refresh', 'true').lower() == 'true'
-
-        # First get group info to find associated M3U accounts
-        groups = manager.list_channel_groups()
-        group = next((g for g in groups if g.get('id') == group_id), None)
-        if not group:
-            return jsonify({'error': 'Group not found'}), 404
-
-        # Refresh M3U accounts associated with this group before fetching streams
-        if do_refresh:
-            m3u_accounts = group.get('m3u_accounts', [])
-            app.logger.debug(f"Group {group_id} m3u_accounts: {m3u_accounts}")
-            for account in m3u_accounts:
-                # m3u_accounts can be a list of IDs or a list of dicts with account info
-                if isinstance(account, dict):
-                    # Try common field names for account ID
-                    account_id = account.get('id') or account.get('m3u_account') or account.get('account_id')
-                    app.logger.debug(f"Account dict: {account}, extracted id: {account_id}")
-                else:
-                    account_id = account
-                if account_id:
-                    app.logger.debug(f"Refreshing M3U account {account_id} before fetching streams")
-                    refresh_result = manager.wait_for_refresh(account_id, timeout=120)
-                    if not refresh_result.get('success'):
-                        app.logger.warning(f"M3U refresh for account {account_id} failed: {refresh_result.get('message')}")
 
         # Get group info and streams
         result = manager.get_group_with_streams(group_id, stream_limit=limit)
