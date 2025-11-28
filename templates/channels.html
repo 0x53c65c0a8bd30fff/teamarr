@@ -80,10 +80,12 @@
                     <thead>
                         <tr>
                             <th style="width: 60px;">Ch #</th>
-                            <th>Name</th>
+                            <th style="width: 50px;">Logo</th>
+                            <th>Channel Name</th>
                             <th style="width: 160px;">Event Group</th>
-                            <th style="width: 80px; text-align: center;">Logo</th>
+                            <th style="width: 160px;">Channel Group</th>
                             <th style="width: 160px;">Deleted</th>
+                            <th style="width: 100px; text-align: center;">Logo Deleted</th>
                         </tr>
                     </thead>
                     <tbody id="history-body">
@@ -261,15 +263,35 @@ async function loadDeletionHistory() {
                 const row = document.createElement('tr');
 
                 const deletedText = formatChannelDateTime(channel.deleted_at);
-                const logoDeleted = channel.dispatcharr_logo_id ? '✓' : '—';
-                const eventDateText = channel.event_date ? formatChannelDateTime(channel.event_date) : '';
+
+                // Logo deleted status: 1=deleted (checkmark), 0=failed (red x), null=N/A
+                let logoDeletedHtml;
+                if (channel.logo_deleted === 1) {
+                    logoDeletedHtml = '<span style="color: #22c55e;">✓</span>';
+                } else if (channel.logo_deleted === 0) {
+                    logoDeletedHtml = '<span style="color: #ef4444;">✗</span>';
+                } else {
+                    logoDeletedHtml = '<span class="text-muted">N/A</span>';
+                }
+
+                // Logo thumbnail (cached URL if available)
+                const logoHtml = channel.logo_url
+                    ? `<img src="${escapeHtml(channel.logo_url)}" class="channel-logo" alt="Logo" onerror="this.style.display='none'" style="opacity: 0.5;">`
+                    : '<span class="text-muted">—</span>';
+
+                // Channel group badge
+                const channelGroupHtml = channel.channel_group_name
+                    ? `<span class="badge badge-info">${escapeHtml(channel.channel_group_name)}</span>`
+                    : '<span class="text-muted">—</span>';
 
                 row.innerHTML = `
                     <td class="text-muted">${channel.channel_number || '—'}</td>
+                    <td>${logoHtml}</td>
                     <td class="text-muted">${escapeHtml(channel.channel_name || 'Unnamed')}</td>
                     <td><span class="badge badge-secondary">${escapeHtml(channel.group_name || '—')}</span></td>
-                    <td class="text-muted" style="text-align: center;">${logoDeleted}</td>
+                    <td>${channelGroupHtml}</td>
                     <td class="text-muted" style="font-size: 0.875rem;">${deletedText}</td>
+                    <td style="text-align: center;">${logoDeletedHtml}</td>
                 `;
                 tbody.appendChild(row);
             });

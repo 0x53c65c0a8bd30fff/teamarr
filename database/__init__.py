@@ -355,8 +355,11 @@ def run_migrations(conn):
             print(f"  ⚠️ Could not create managed_channels table: {e}")
         conn.commit()
     else:
-        # Add dispatcharr_logo_id if missing
-        add_columns_if_missing("managed_channels", [("dispatcharr_logo_id", "INTEGER")])
+        # Add columns if missing
+        add_columns_if_missing("managed_channels", [
+            ("dispatcharr_logo_id", "INTEGER"),
+            ("logo_deleted", "INTEGER")  # 1=deleted, 0=failed to delete, NULL=no logo was present
+        ])
 
     # =========================================================================
     # 5. DATA FIXES
@@ -1277,11 +1280,23 @@ def update_managed_channel(channel_id: int, data: Dict[str, Any]) -> bool:
         conn.close()
 
 
-def mark_managed_channel_deleted(channel_id: int) -> bool:
-    """Mark a managed channel as deleted (soft delete)."""
+def mark_managed_channel_deleted(channel_id: int, logo_deleted: bool = None) -> bool:
+    """
+    Mark a managed channel as deleted (soft delete).
+
+    Args:
+        channel_id: ID of the managed channel
+        logo_deleted: True if logo was deleted, False if deletion failed, None if no logo
+
+    Returns:
+        True if channel was marked as deleted
+    """
+    # Convert bool to int for SQLite (True=1, False=0, None=NULL)
+    logo_deleted_val = None if logo_deleted is None else (1 if logo_deleted else 0)
+
     return db_execute(
-        "UPDATE managed_channels SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?",
-        (channel_id,)
+        "UPDATE managed_channels SET deleted_at = CURRENT_TIMESTAMP, logo_deleted = ? WHERE id = ?",
+        (logo_deleted_val, channel_id)
     ) > 0
 
 

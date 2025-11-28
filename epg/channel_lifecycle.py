@@ -455,8 +455,13 @@ class ChannelLifecycleManager:
                         logger.debug(f"Deleted logo {logo_id} for channel '{channel_name}'")
 
                 # Step 3: Mark as deleted in database
+                # Pass logo_deleted status: True if deleted, False if failed, None if no logo
                 if channel_id:
-                    if mark_managed_channel_deleted(channel_id):
+                    logo_deleted_status = None  # No logo was present
+                    if logo_id:
+                        logo_deleted_status = result['logo_deleted']  # True or False based on deletion result
+
+                    if mark_managed_channel_deleted(channel_id, logo_deleted=logo_deleted_status):
                         result['db_updated'] = True
 
                 result['success'] = True
