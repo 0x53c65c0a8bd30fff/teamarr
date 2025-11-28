@@ -1197,10 +1197,14 @@ def get_all_managed_channels(include_deleted: bool = False) -> List[Dict[str, An
 
 def get_channels_pending_deletion() -> List[Dict[str, Any]]:
     """Get channels that are scheduled for deletion and past their delete time."""
+    # Use datetime() to normalize both values for comparison
+    # scheduled_delete_at is stored as ISO8601 with timezone (e.g., 2025-11-28T04:59:59+00:00)
+    # CURRENT_TIMESTAMP returns YYYY-MM-DD HH:MM:SS format
+    # datetime() normalizes both to comparable format
     return db_fetch_all("""
         SELECT * FROM managed_channels
         WHERE scheduled_delete_at IS NOT NULL
-        AND scheduled_delete_at <= CURRENT_TIMESTAMP
+        AND datetime(scheduled_delete_at) <= datetime('now')
         AND deleted_at IS NULL
         ORDER BY scheduled_delete_at
     """)

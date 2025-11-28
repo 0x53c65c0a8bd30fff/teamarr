@@ -279,7 +279,7 @@ class EventEPGGenerator:
                     desc.text = desc_text
 
         # Categories - from template with variable resolution (respects categories_apply_to)
-        self._add_categories(programme, template, template_ctx, programme_type='game')
+        self._add_categories(programme, template, template_ctx, is_filler=False)
 
         # Date - convert to user's timezone for correct local date
         from zoneinfo import ZoneInfo
@@ -394,10 +394,9 @@ class EventEPGGenerator:
                 icon.set('src', icon_url)
 
         # Categories - respects categories_apply_to setting
-        self._add_categories(programme, template, template_ctx, programme_type='pregame')
+        self._add_categories(programme, template, template_ctx, is_filler=True)
 
-        # Flags - from template
-        self._add_flags(programme, template)
+        # Flags - only apply to actual events, not filler (pregame is filler)
 
     def _add_postgame_programme(
         self,
@@ -482,26 +481,27 @@ class EventEPGGenerator:
                 icon.set('src', icon_url)
 
         # Categories - respects categories_apply_to setting
-        self._add_categories(programme, template, template_ctx, programme_type='postgame')
+        self._add_categories(programme, template, template_ctx, is_filler=True)
 
-        # Flags - from template
-        self._add_flags(programme, template)
+        # Flags - only apply to actual events, not filler (postgame is filler)
 
     def _add_categories(
         self,
         programme,
         template: Optional[Dict],
         context: Dict = None,
-        programme_type: str = 'game'
+        is_filler: bool = False
     ):
         """
         Add category elements from template, resolving any variables.
+
+        Matches team-based EPG generator behavior for consistency.
 
         Args:
             programme: XML programme element
             template: Template dict
             context: Variable resolution context
-            programme_type: 'game', 'pregame', or 'postgame'
+            is_filler: True if this is a filler programme (pregame/postgame)
         """
         import xml.etree.ElementTree as ET
         import json
@@ -509,13 +509,14 @@ class EventEPGGenerator:
         if not template:
             return
 
-        # Check categories_apply_to setting
-        apply_to = template.get('categories_apply_to', 'all')
-        if apply_to != 'all':
-            # Parse apply_to - can be comma-separated: "game,pregame" or single: "game"
-            allowed_types = [t.strip().lower() for t in apply_to.split(',')]
-            if programme_type not in allowed_types:
-                return  # Categories don't apply to this programme type
+        # Check categories_apply_to setting (matches team-based generator)
+        # 'all' = apply to all programs (events and filler)
+        # 'events' = apply only to actual game events (not filler)
+        categories_apply_to = template.get('categories_apply_to', 'events')
+        should_add_categories = (categories_apply_to == 'all') or (categories_apply_to == 'events' and not is_filler)
+
+        if not should_add_categories:
+            return
 
         # Get categories from template
         categories_json = template.get('categories')
@@ -534,15 +535,19 @@ class EventEPGGenerator:
         if not categories:
             return
 
+        added_categories = set()
         for cat in categories:
             if cat:  # Skip empty strings
                 # Resolve any template variables in category
                 resolved_cat = cat
                 if context and '{' in cat:
                     resolved_cat = self._template_engine.resolve(cat, context)
-                cat_elem = ET.SubElement(programme, 'category')
-                cat_elem.set('lang', 'en')
-                cat_elem.text = resolved_cat
+                # Avoid duplicates
+                if resolved_cat not in added_categories:
+                    cat_elem = ET.SubElement(programme, 'category')
+                    cat_elem.set('lang', 'en')
+                    cat_elem.text = resolved_cat
+                    added_categories.add(resolved_cat)
 
     def _get_postgame_description(self, template: Dict, event: Dict) -> str:
         """

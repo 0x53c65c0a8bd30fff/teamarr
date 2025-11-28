@@ -520,15 +520,21 @@ class EventMatcher:
                     'detail': status_type.get('detail') or status_type.get('shortDetail')
                 }
 
-            # Update scores (real-time)
+            # Update scores and records (real-time from scoreboard)
             for competitor in comp.get('competitors', []):
                 team_id = competitor.get('team', {}).get('id')
                 score = competitor.get('score')
+                # Scoreboard uses 'records' (plural) with 'summary' field
+                records_data = competitor.get('records') or []
 
                 if event.get('home_team', {}).get('id') == team_id:
                     event['home_team']['score'] = score
+                    if records_data:
+                        event['home_team']['record'] = self._extract_record(records_data)
                 elif event.get('away_team', {}).get('id') == team_id:
                     event['away_team']['score'] = score
+                    if records_data:
+                        event['away_team']['record'] = self._extract_record(records_data)
 
             # Update weather
             if comp.get('weather'):

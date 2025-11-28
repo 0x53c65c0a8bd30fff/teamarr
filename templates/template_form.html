@@ -874,11 +874,12 @@
 
                         <!-- Hidden counter for form submission -->
                         <input type="hidden" id="fallback-count" name="fallback_count" value="0">
-                        <!-- Hidden fields for JSON data (populated on submit) -->
-                        <input type="hidden" id="description_options_field" name="description_options" value="[]">
-                        <input type="hidden" id="flags_field" name="flags" value="{}">
-                        <input type="hidden" id="categories_field" name="categories" value="[]">
                     </fieldset>
+
+                    <!-- Hidden fields for JSON data (populated on submit) - OUTSIDE section divs so always submitted -->
+                    <input type="hidden" id="description_options_field" name="description_options" value="[]">
+                    <input type="hidden" id="flags_field" name="flags" value="{}">
+                    <input type="hidden" id="categories_field" name="categories" value="[]">
 
                     <!-- Simple Description Field (Event templates - single description only) -->
                     <fieldset id="event-description-section" style="margin-top: 1.5rem; display: none;">

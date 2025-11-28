@@ -145,11 +145,12 @@ class XMLTVGenerator:
             icon = ET.SubElement(programme, 'icon')
             icon.set('src', icon_url)
 
-        # Flags - entirely template-controlled (no hardcoded logic)
-        if flags.get('new', False):
-            ET.SubElement(programme, 'new')
-        if flags.get('live', False):
-            ET.SubElement(programme, 'live')
+        # Flags - only apply to actual events, not filler programmes
+        if not is_filler:
+            if flags.get('new', False):
+                ET.SubElement(programme, 'new')
+            if flags.get('live', False):
+                ET.SubElement(programme, 'live')
 
     def _add_category(self, programme: ET.Element, category: str):
         """Add category element"""
