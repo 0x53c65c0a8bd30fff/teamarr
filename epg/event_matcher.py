@@ -9,12 +9,14 @@ This module bridges the gap between:
 - EPG Generation: needs full event data for XMLTV output
 """
 
-import logging
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any, Tuple
 from zoneinfo import ZoneInfo
 
-logger = logging.getLogger(__name__)
+from epg.league_config import get_league_config, parse_api_path, is_college_league
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class EventMatcher:
@@ -62,127 +64,37 @@ class EventMatcher:
         self._league_config: Dict[str, Dict] = {}
 
     def _get_league_config(self, league_code: str) -> Optional[Dict]:
-        """Get league configuration (sport, api_path) from database."""
-        if league_code in self._league_config:
-            return self._league_config[league_code]
+        """Get league configuration (sport, api_path) using shared module."""
+        return get_league_config(league_code, self.db_connection_func, self._league_config)
 
-        if not self.db_connection_func:
-            # Fallback to common mappings
-            fallback = {
-                'nfl': {'sport': 'football', 'api_path': 'football/nfl'},
-                'nba': {'sport': 'basketball', 'api_path': 'basketball/nba'},
-                'nhl': {'sport': 'hockey', 'api_path': 'hockey/nhl'},
-                'mlb': {'sport': 'baseball', 'api_path': 'baseball/mlb'},
-                'mls': {'sport': 'soccer', 'api_path': 'soccer/usa.1'},
-                'epl': {'sport': 'soccer', 'api_path': 'soccer/eng.1'},
-                'laliga': {'sport': 'soccer', 'api_path': 'soccer/esp.1'},
-                'bundesliga': {'sport': 'soccer', 'api_path': 'soccer/ger.1'},
-                'seriea': {'sport': 'soccer', 'api_path': 'soccer/ita.1'},
-                'ligue1': {'sport': 'soccer', 'api_path': 'soccer/fra.1'},
-                # College sports
-                'ncaam': {'sport': 'basketball', 'api_path': 'basketball/mens-college-basketball'},
-                'ncaaw': {'sport': 'basketball', 'api_path': 'basketball/womens-college-basketball'},
-                'ncaaf': {'sport': 'football', 'api_path': 'football/college-football'},
-            }
-            return fallback.get(league_code.lower())
-
-        try:
-            conn = self.db_connection_func()
-            cursor = conn.cursor()
-            result = cursor.execute(
-                "SELECT sport, api_path FROM league_config WHERE league_code = ?",
-                (league_code.lower(),)
-            ).fetchone()
-            conn.close()
-
-            if result:
-                config = {'sport': result[0], 'api_path': result[1]}
-                self._league_config[league_code] = config
-                return config
-            return None
-        except Exception as e:
-            logger.error(f"Error fetching league config for {league_code}: {e}")
-            return None
-
-    def _parse_api_path(self, api_path: str) -> Tuple[str, str]:
-        """Parse api_path into (sport, league) tuple."""
-        parts = api_path.split('/')
-        if len(parts) == 2:
-            return parts[0], parts[1]
-        return None, None
-
-    def find_event(
+    def _filter_matching_events(
         self,
-        team1_id: str,
+        events: List[Dict],
         team2_id: str,
-        league: str,
-        game_date: datetime = None,
-        game_time: datetime = None,
-        include_final_events: bool = False
-    ) -> Dict[str, Any]:
+        include_final_events: bool
+    ) -> Tuple[List[Dict], bool]:
         """
-        Find an ESPN event between two teams.
-
-        Searches team1's schedule for any game against team2, regardless
-        of which team is home or away.
-
-        Matching priority:
-        1. If game_date + game_time provided: match exact date and closest time (for double-headers)
-        2. If game_date provided: match that specific date
-        3. Otherwise: return nearest upcoming game
+        Filter schedule events to find games involving team2.
 
         Args:
-            team1_id: ESPN team ID for first team (from stream name)
-            team2_id: ESPN team ID for second team (from stream name)
-            league: League code (e.g., 'nfl', 'epl')
-            game_date: Optional target date extracted from stream name
-            game_time: Optional target time for double-header disambiguation
-            include_final_events: Whether to include completed events from today (default False)
+            events: Raw events from ESPN schedule API
+            team2_id: ESPN team ID to match against
+            include_final_events: Whether to include completed events from today
 
         Returns:
-            Dict with:
-            - found: bool
-            - event: Full event dict (if found)
-            - event_id: ESPN event ID (if found)
-            - reason: Error message (if not found)
+            Tuple of (matching_events, skipped_completed_game)
+            - matching_events: List of {event, event_date, event_id} dicts
+            - skipped_completed_game: True if we skipped a completed game
         """
-        result = {
-            'found': False,
-            'team1_id': team1_id,
-            'team2_id': team2_id,
-            'league': league
-        }
-
-        # Get league config
-        config = self._get_league_config(league)
-        if not config:
-            result['reason'] = f'Unknown league: {league}'
-            return result
-
-        sport, api_league = self._parse_api_path(config['api_path'])
-        if not sport or not api_league:
-            result['reason'] = f'Invalid api_path for league: {league}'
-            return result
-
-        # Fetch team1's schedule (contains all games including vs team2)
-        logger.debug(f"Fetching schedule for team {team1_id} in {league}")
-        schedule_data = self.espn.get_team_schedule(sport, api_league, team1_id)
-
-        if not schedule_data or 'events' not in schedule_data:
-            result['reason'] = f'Could not fetch schedule for team {team1_id}'
-            return result
-
-        # Search date range
-        # Search window is based on current time
         now = datetime.now(ZoneInfo('UTC'))
         cutoff_past = now - timedelta(days=self.SEARCH_DAYS_BACK)
         cutoff_future = now + timedelta(days=self.SEARCH_DAYS_AHEAD)
+        today = now.date()
 
-        # Search for any game involving team2 (regardless of home/away)
         matching_events = []
-        skipped_completed_game = False  # Track if we skipped a completed game from previous day
+        skipped_completed_game = False
 
-        for event in schedule_data.get('events', []):
+        for event in events:
             try:
                 # Parse event date
                 event_date_str = event.get('date', '')
@@ -200,37 +112,31 @@ class EventMatcher:
                 if not competitions:
                     continue
 
-                # Check game status - allow completed games from today or later
-                status = competitions[0].get('status', {})
+                competition = competitions[0]
+
+                # Check game status
+                status = competition.get('status', {})
                 status_type = status.get('type', {})
                 is_completed = status_type.get('completed', False) or 'FINAL' in status_type.get('name', '').upper()
 
-                competition = competitions[0]
+                # Check if team2 is a competitor
                 competitors = competition.get('competitors', [])
-
-                # Find if team2_id is one of the competitors
                 team_ids_in_game = [
-                    c.get('team', {}).get('id', c.get('id'))
+                    str(c.get('team', {}).get('id', c.get('id')))
                     for c in competitors
+                    if c.get('team', {}).get('id') or c.get('id')
                 ]
 
-                # Convert to strings for comparison
-                team_ids_in_game = [str(tid) for tid in team_ids_in_game if tid]
-
-                # Check if this game involves team2
                 if str(team2_id) not in team_ids_in_game:
                     continue
 
                 # Filter completed games based on settings
                 if is_completed:
-                    today = datetime.now(ZoneInfo('UTC')).date()
                     event_day = event_date.date()
                     if event_day < today:
-                        # Always skip completed games from previous days
                         skipped_completed_game = True
                         continue
                     elif event_day == today and not include_final_events:
-                        # Skip completed games from today unless include_final_events is True
                         skipped_completed_game = True
                         continue
 
@@ -245,21 +151,31 @@ class EventMatcher:
                 logger.warning(f"Error parsing event: {e}")
                 continue
 
-        if not matching_events:
-            if skipped_completed_game:
-                result['reason'] = 'Game completed (excluded)'
-            else:
-                result['reason'] = f'No game found between teams'
-            return result
+        return matching_events, skipped_completed_game
 
-        # Sort by date
-        matching_events.sort(key=lambda x: x['event_date'])
+    def _select_best_match(
+        self,
+        matching_events: List[Dict],
+        game_date: Optional[datetime],
+        game_time: Optional[datetime]
+    ) -> Dict:
+        """
+        Select the best matching event based on date/time hints.
 
-        # Select best match based on available info
-        best_match = None
+        Priority:
+        1. If game_date + game_time provided: match date and closest time
+        2. If game_date provided: match that date
+        3. Otherwise: today's games first, then nearest upcoming
 
+        Args:
+            matching_events: Sorted list of matching events
+            game_date: Optional target date from stream name
+            game_time: Optional target time for double-header disambiguation
+
+        Returns:
+            Best matching event dict
+        """
         if game_date:
-            # If we have a target date, find games on that date
             target_date = game_date.date()
             date_matches = [
                 e for e in matching_events
@@ -273,35 +189,96 @@ class EventMatcher:
                     date_matches.sort(key=lambda e: abs(
                         (e['event_date'].hour + e['event_date'].minute / 60) - target_hour
                     ))
-                best_match = date_matches[0]
                 logger.debug(f"Matched game on target date {target_date}")
+                return date_matches[0]
             else:
-                # No exact date match, fall back to nearest upcoming
                 logger.debug(f"No game on target date {target_date}, using nearest")
 
-        if not best_match:
-            # No date provided or no date match - prioritize today's games, then nearest upcoming
-            now = datetime.now(ZoneInfo('UTC'))
-            today = now.date()
+        # No date provided or no date match - prioritize today, then upcoming
+        now = datetime.now(ZoneInfo('UTC'))
+        today = now.date()
 
-            # First, check for any games TODAY (even if already started)
-            todays_games = [e for e in matching_events if e['event_date'].date() == today]
-            if todays_games:
-                best_match = todays_games[0]  # First game today
-                logger.debug(f"Selected today's game: {best_match['event_id']}")
-            else:
-                # No games today - use nearest upcoming
-                upcoming = [e for e in matching_events if e['event_date'] >= now]
-                if upcoming:
-                    best_match = upcoming[0]  # Nearest upcoming
-                else:
-                    best_match = matching_events[-1]  # Most recent (shouldn't happen with FINAL filter)
+        todays_games = [e for e in matching_events if e['event_date'].date() == today]
+        if todays_games:
+            logger.debug(f"Selected today's game: {todays_games[0]['event_id']}")
+            return todays_games[0]
 
-        # Parse the event into our standard format
-        parsed_event = self._parse_event(best_match['event'], sport, api_league)
+        upcoming = [e for e in matching_events if e['event_date'] >= now]
+        if upcoming:
+            return upcoming[0]
 
+        return matching_events[-1]
+
+    def find_event(
+        self,
+        team1_id: str,
+        team2_id: str,
+        league: str,
+        game_date: datetime = None,
+        game_time: datetime = None,
+        include_final_events: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Find an ESPN event between two teams.
+
+        Searches team1's schedule for any game against team2, regardless
+        of which team is home or away.
+
+        Args:
+            team1_id: ESPN team ID for first team (from stream name)
+            team2_id: ESPN team ID for second team (from stream name)
+            league: League code (e.g., 'nfl', 'epl')
+            game_date: Optional target date extracted from stream name
+            game_time: Optional target time for double-header disambiguation
+            include_final_events: Whether to include completed events from today
+
+        Returns:
+            Dict with found, event, event_id, reason (if not found)
+        """
+        result = {
+            'found': False,
+            'team1_id': team1_id,
+            'team2_id': team2_id,
+            'league': league
+        }
+
+        # Get league config
+        config = self._get_league_config(league)
+        if not config:
+            result['reason'] = f'Unknown league: {league}'
+            return result
+
+        sport, api_league = parse_api_path(config['api_path'])
+        if not sport or not api_league:
+            result['reason'] = f'Invalid api_path for league: {league}'
+            return result
+
+        # Fetch team1's schedule
+        logger.debug(f"Fetching schedule for team {team1_id} in {league}")
+        schedule_data = self.espn.get_team_schedule(sport, api_league, team1_id)
+
+        if not schedule_data or 'events' not in schedule_data:
+            result['reason'] = f'Could not fetch schedule for team {team1_id}'
+            return result
+
+        # Filter to matching events
+        matching_events, skipped_completed = self._filter_matching_events(
+            schedule_data.get('events', []),
+            team2_id,
+            include_final_events
+        )
+
+        if not matching_events:
+            result['reason'] = 'Game completed (excluded)' if skipped_completed else 'No game found between teams'
+            return result
+
+        # Sort by date and select best match
+        matching_events.sort(key=lambda x: x['event_date'])
+        best_match = self._select_best_match(matching_events, game_date, game_time)
+
+        # Parse and return
         result['found'] = True
-        result['event'] = parsed_event
+        result['event'] = self._parse_event(best_match['event'], sport, api_league)
         result['event_id'] = best_match['event_id']
         result['event_date'] = best_match['event_date'].isoformat()
 
@@ -461,7 +438,7 @@ class EventMatcher:
         if not config:
             return event
 
-        sport, api_league = self._parse_api_path(config['api_path'])
+        sport, api_league = parse_api_path(config['api_path'])
         if not sport:
             return event
 
@@ -473,7 +450,8 @@ class EventMatcher:
         try:
             event_date = datetime.fromisoformat(event_date_str.replace('Z', '+00:00'))
             date_str = event_date.strftime('%Y%m%d')
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Could not parse event date '{event_date_str}': {e}")
             return event
 
         # Fetch scoreboard
@@ -586,138 +564,101 @@ class EventMatcher:
         if not config:
             return event
 
-        sport, api_league = self._parse_api_path(config['api_path'])
+        sport, api_league = parse_api_path(config['api_path'])
         if not sport:
             return event
 
         # Determine if this is a college league
-        is_college = 'college' in league.lower()
+        is_college = is_college_league(league)
 
-        # Enrich home team
-        home_team = event.get('home_team', {})
-        if home_team.get('id'):
-            home_id = home_team['id']
-
-            # Get team info (has logos, colors)
-            home_info = self.espn.get_team_info(sport, api_league, home_id)
-            if home_info and 'team' in home_info:
-                team_data = home_info['team']
-
-                # Fill in logo if missing
-                if not home_team.get('logo'):
-                    logos = team_data.get('logos', [])
-                    if logos:
-                        event['home_team']['logo'] = logos[0].get('href')
-
-                # Fill in color if missing
-                if not home_team.get('color'):
-                    event['home_team']['color'] = team_data.get('color')
-
-            # Get team stats (has current record, conference, division, rank, seed, streak)
-            home_stats = self.espn.get_team_stats(sport, api_league, home_id)
-            if home_stats:
-                # Always use team stats record - it's the current record
-                stats_record = home_stats.get('record', {})
-                if stats_record and stats_record.get('summary') and stats_record.get('summary') != '0-0':
-                    event['home_team']['record'] = stats_record
-                elif not event['home_team'].get('record') or event['home_team'].get('record', {}).get('summary') == '0-0':
-                    if stats_record:
-                        event['home_team']['record'] = stats_record
-
-                # Conference and division (stored separately for college vs pro)
-                if is_college:
-                    event['home_team']['college_conference'] = home_stats.get('conference_name', '')
-                    event['home_team']['college_conference_abbrev'] = home_stats.get('conference_abbrev', '')
-                    event['home_team']['pro_conference'] = ''
-                    event['home_team']['pro_conference_abbrev'] = ''
-                    event['home_team']['pro_division'] = ''
-                else:
-                    event['home_team']['college_conference'] = ''
-                    event['home_team']['college_conference_abbrev'] = ''
-                    event['home_team']['pro_conference'] = home_stats.get('conference_name', '')
-                    event['home_team']['pro_conference_abbrev'] = home_stats.get('conference_abbrev', '')
-                    event['home_team']['pro_division'] = home_stats.get('division_name', '')
-
-                # Rank (college - show #X if ranked top 25, else empty)
-                rank = home_stats.get('rank', 99)
-                event['home_team']['rank'] = f"#{rank}" if rank <= 25 else ''
-
-                # Playoff seed (pro - show ordinal if seeded)
-                seed = home_stats.get('playoff_seed', 0)
-                event['home_team']['seed'] = self._format_ordinal(seed) if seed > 0 else ''
-
-                # Streak (signed: positive=wins, negative=losses)
-                streak_count = home_stats.get('streak_count', 0)
-                if streak_count > 0:
-                    event['home_team']['streak'] = f"W{streak_count}"
-                elif streak_count < 0:
-                    event['home_team']['streak'] = f"L{abs(streak_count)}"
-                else:
-                    event['home_team']['streak'] = ''
-
-        # Enrich away team
-        away_team = event.get('away_team', {})
-        if away_team.get('id'):
-            away_id = away_team['id']
-
-            # Get team info (has logos, colors)
-            away_info = self.espn.get_team_info(sport, api_league, away_id)
-            if away_info and 'team' in away_info:
-                team_data = away_info['team']
-
-                # Fill in logo if missing
-                if not away_team.get('logo'):
-                    logos = team_data.get('logos', [])
-                    if logos:
-                        event['away_team']['logo'] = logos[0].get('href')
-
-                # Fill in color if missing
-                if not away_team.get('color'):
-                    event['away_team']['color'] = team_data.get('color')
-
-            # Get team stats (has current record, conference, division, rank, seed, streak)
-            away_stats = self.espn.get_team_stats(sport, api_league, away_id)
-            if away_stats:
-                # Always use team stats record - it's the current record
-                stats_record = away_stats.get('record', {})
-                if stats_record and stats_record.get('summary') and stats_record.get('summary') != '0-0':
-                    event['away_team']['record'] = stats_record
-                elif not event['away_team'].get('record') or event['away_team'].get('record', {}).get('summary') == '0-0':
-                    if stats_record:
-                        event['away_team']['record'] = stats_record
-
-                # Conference and division (stored separately for college vs pro)
-                if is_college:
-                    event['away_team']['college_conference'] = away_stats.get('conference_name', '')
-                    event['away_team']['college_conference_abbrev'] = away_stats.get('conference_abbrev', '')
-                    event['away_team']['pro_conference'] = ''
-                    event['away_team']['pro_conference_abbrev'] = ''
-                    event['away_team']['pro_division'] = ''
-                else:
-                    event['away_team']['college_conference'] = ''
-                    event['away_team']['college_conference_abbrev'] = ''
-                    event['away_team']['pro_conference'] = away_stats.get('conference_name', '')
-                    event['away_team']['pro_conference_abbrev'] = away_stats.get('conference_abbrev', '')
-                    event['away_team']['pro_division'] = away_stats.get('division_name', '')
-
-                # Rank (college - show #X if ranked top 25, else empty)
-                rank = away_stats.get('rank', 99)
-                event['away_team']['rank'] = f"#{rank}" if rank <= 25 else ''
-
-                # Playoff seed (pro - show ordinal if seeded)
-                seed = away_stats.get('playoff_seed', 0)
-                event['away_team']['seed'] = self._format_ordinal(seed) if seed > 0 else ''
-
-                # Streak (signed: positive=wins, negative=losses)
-                streak_count = away_stats.get('streak_count', 0)
-                if streak_count > 0:
-                    event['away_team']['streak'] = f"W{streak_count}"
-                elif streak_count < 0:
-                    event['away_team']['streak'] = f"L{abs(streak_count)}"
-                else:
-                    event['away_team']['streak'] = ''
+        # Enrich both teams using shared helper
+        self._enrich_single_team(event, 'home_team', sport, api_league, is_college)
+        self._enrich_single_team(event, 'away_team', sport, api_league, is_college)
 
         return event
+
+    def _enrich_single_team(
+        self,
+        event: Dict,
+        team_key: str,
+        sport: str,
+        api_league: str,
+        is_college: bool
+    ) -> None:
+        """
+        Enrich a single team (home or away) with stats from ESPN team endpoint.
+
+        Args:
+            event: Event dict to modify in place
+            team_key: Either 'home_team' or 'away_team'
+            sport: Sport code (e.g., 'football')
+            api_league: League code for API (e.g., 'nfl')
+            is_college: Whether this is a college league
+        """
+        team = event.get(team_key, {})
+        if not team.get('id'):
+            return
+
+        team_id = team['id']
+
+        # Get team info (has logos, colors)
+        team_info = self.espn.get_team_info(sport, api_league, team_id)
+        if team_info and 'team' in team_info:
+            team_data = team_info['team']
+
+            # Fill in logo if missing
+            if not team.get('logo'):
+                logos = team_data.get('logos', [])
+                if logos:
+                    event[team_key]['logo'] = logos[0].get('href')
+
+            # Fill in color if missing
+            if not team.get('color'):
+                event[team_key]['color'] = team_data.get('color')
+
+        # Get team stats (has current record, conference, division, rank, seed, streak)
+        team_stats = self.espn.get_team_stats(sport, api_league, team_id)
+        if not team_stats:
+            return
+
+        # Always use team stats record - it's the current record
+        stats_record = team_stats.get('record', {})
+        if stats_record and stats_record.get('summary') and stats_record.get('summary') != '0-0':
+            event[team_key]['record'] = stats_record
+        elif not event[team_key].get('record') or event[team_key].get('record', {}).get('summary') == '0-0':
+            if stats_record:
+                event[team_key]['record'] = stats_record
+
+        # Conference and division (stored separately for college vs pro)
+        if is_college:
+            event[team_key]['college_conference'] = team_stats.get('conference_name', '')
+            event[team_key]['college_conference_abbrev'] = team_stats.get('conference_abbrev', '')
+            event[team_key]['pro_conference'] = ''
+            event[team_key]['pro_conference_abbrev'] = ''
+            event[team_key]['pro_division'] = ''
+        else:
+            event[team_key]['college_conference'] = ''
+            event[team_key]['college_conference_abbrev'] = ''
+            event[team_key]['pro_conference'] = team_stats.get('conference_name', '')
+            event[team_key]['pro_conference_abbrev'] = team_stats.get('conference_abbrev', '')
+            event[team_key]['pro_division'] = team_stats.get('division_name', '')
+
+        # Rank (college - show #X if ranked top 25, else empty)
+        rank = team_stats.get('rank', 99)
+        event[team_key]['rank'] = f"#{rank}" if rank <= 25 else ''
+
+        # Playoff seed (pro - show ordinal if seeded)
+        seed = team_stats.get('playoff_seed', 0)
+        event[team_key]['seed'] = self._format_ordinal(seed) if seed > 0 else ''
+
+        # Streak (signed: positive=wins, negative=losses)
+        streak_count = team_stats.get('streak_count', 0)
+        if streak_count > 0:
+            event[team_key]['streak'] = f"W{streak_count}"
+        elif streak_count < 0:
+            event[team_key]['streak'] = f"L{abs(streak_count)}"
+        else:
+            event[team_key]['streak'] = ''
 
     def _format_ordinal(self, n: int) -> str:
         """Format number with ordinal suffix (1st, 2nd, 3rd, etc.)"""
@@ -788,7 +729,7 @@ class EventMatcher:
 
 
 # Convenience function for standalone use
-def create_event_matcher():
+def create_event_matcher() -> EventMatcher:
     """Create an EventMatcher instance with default configuration."""
     from api.espn_client import ESPNClient
     from database import get_connection

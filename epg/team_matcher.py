@@ -13,11 +13,13 @@ Key Features:
 """
 
 import re
-import logging
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any, Tuple
 
-logger = logging.getLogger(__name__)
+from epg.league_config import get_league_config, parse_api_path, is_college_league
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def extract_date_from_text(text: str) -> Optional[datetime]:
@@ -223,7 +225,7 @@ class TeamMatcher:
 
     def _get_league_config(self, league_code: str) -> Optional[Dict]:
         """
-        Get league configuration (sport, api_path) from database.
+        Get league configuration (sport, api_path) using shared module.
 
         Args:
             league_code: League code (e.g., 'nfl', 'epl')
@@ -231,45 +233,7 @@ class TeamMatcher:
         Returns:
             Dict with league config or None if not found
         """
-        if league_code in self._league_config:
-            return self._league_config[league_code]
-
-        if not self.db_connection_func:
-            # Fallback to common mappings if no DB
-            fallback = {
-                'nfl': {'sport': 'football', 'api_path': 'football/nfl'},
-                'nba': {'sport': 'basketball', 'api_path': 'basketball/nba'},
-                'nhl': {'sport': 'hockey', 'api_path': 'hockey/nhl'},
-                'mlb': {'sport': 'baseball', 'api_path': 'baseball/mlb'},
-                'mls': {'sport': 'soccer', 'api_path': 'soccer/usa.1'},
-                'epl': {'sport': 'soccer', 'api_path': 'soccer/eng.1'},
-                'laliga': {'sport': 'soccer', 'api_path': 'soccer/esp.1'},
-                'bundesliga': {'sport': 'soccer', 'api_path': 'soccer/ger.1'},
-                'seriea': {'sport': 'soccer', 'api_path': 'soccer/ita.1'},
-                'ligue1': {'sport': 'soccer', 'api_path': 'soccer/fra.1'},
-            }
-            return fallback.get(league_code.lower())
-
-        try:
-            conn = self.db_connection_func()
-            cursor = conn.cursor()
-            result = cursor.execute(
-                "SELECT sport, api_path FROM league_config WHERE league_code = ?",
-                (league_code.lower(),)
-            ).fetchone()
-            conn.close()
-
-            if result:
-                config = {'sport': result[0], 'api_path': result[1]}
-                self._league_config[league_code] = config
-                return config
-            return None
-        except Exception as e:
-            logger.error(f"Error fetching league config for {league_code}: {e}")
-            return None
-
-    # College leagues that need conference-based team fetching
-    COLLEGE_LEAGUES = {'ncaam', 'ncaaw', 'ncaaf', 'mens-college-basketball', 'womens-college-basketball', 'college-football'}
+        return get_league_config(league_code, self.db_connection_func, self._league_config)
 
     def _get_teams_for_league(self, league_code: str) -> List[Dict]:
         """
@@ -299,16 +263,12 @@ class TeamMatcher:
             return []
 
         # Parse sport and league from api_path (e.g., "basketball/nba" -> "basketball", "nba")
-        api_path = config['api_path']
-        parts = api_path.split('/')
-        if len(parts) != 2:
-            logger.error(f"Invalid api_path format: {api_path}")
+        sport, league = parse_api_path(config['api_path'])
+        if not sport or not league:
             return []
 
-        sport, league = parts
-
         # College leagues need conference-based fetching
-        if league_lower in self.COLLEGE_LEAGUES or 'college' in league.lower():
+        if is_college_league(league_lower) or is_college_league(league):
             teams = self._fetch_college_teams(sport, league)
         else:
             # Pro leagues - simple team list
@@ -700,6 +660,48 @@ class TeamMatcher:
         logger.debug(f"No match for: '{text}' in {league}")
         return None
 
+    def _extract_metadata(self, stream_name: str) -> Tuple[Optional[datetime], Optional[datetime]]:
+        """
+        Extract date and time from stream name for disambiguation.
+
+        Args:
+            stream_name: Raw stream/channel name
+
+        Returns:
+            Tuple of (game_date, game_time) - either may be None
+        """
+        game_date = extract_date_from_text(stream_name)
+        if game_date:
+            logger.debug(f"Extracted date from stream name: {game_date.date()}")
+
+        game_time = extract_time_from_text(stream_name)
+        if game_time:
+            logger.debug(f"Extracted time from stream name: {game_time.strftime('%H:%M')}")
+
+        return game_date, game_time
+
+    def _split_matchup(self, normalized: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        """
+        Split normalized stream name into away and home parts.
+
+        Args:
+            normalized: Normalized stream name
+
+        Returns:
+            Tuple of (away_part, home_part, error_reason)
+            - If successful: (away, home, None)
+            - If failed: (None, None, reason)
+        """
+        separator, sep_pos = self._find_separator(normalized)
+        if not separator:
+            return None, None, f'No separator found in: {normalized}'
+
+        # Convention: "Away vs/at Home" or "Away @ Home"
+        away_part = normalized[:sep_pos].strip()
+        home_part = normalized[sep_pos + len(separator):].strip()
+
+        return away_part, home_part, None
+
     def extract_teams(self, stream_name: str, league: str) -> Dict[str, Any]:
         """
         Extract team matchup from a stream/channel name.
@@ -721,24 +723,15 @@ class TeamMatcher:
             - raw_away, raw_home: Raw extracted strings (for debugging)
             - game_date: datetime or None - extracted date from stream name
         """
+        # Initialize result
+        game_date, game_time = self._extract_metadata(stream_name)
         result = {
             'matched': False,
             'stream_name': stream_name,
             'league': league,
-            'game_date': None,
-            'game_time': None
+            'game_date': game_date,
+            'game_time': game_time
         }
-
-        # Try to extract date and time from the stream name (for disambiguation)
-        extracted_date = extract_date_from_text(stream_name)
-        if extracted_date:
-            result['game_date'] = extracted_date
-            logger.debug(f"Extracted date from stream name: {extracted_date.date()}")
-
-        extracted_time = extract_time_from_text(stream_name)
-        if extracted_time:
-            result['game_time'] = extracted_time
-            logger.debug(f"Extracted time from stream name: {extracted_time.strftime('%H:%M')}")
 
         # Get teams for this league
         teams = self._get_teams_for_league(league)
@@ -746,45 +739,35 @@ class TeamMatcher:
             result['reason'] = f'No team data available for league: {league}'
             return result
 
-        # Normalize the stream name
+        # Normalize and split the stream name
         normalized = self._normalize_for_stream(stream_name)
         if not normalized:
             result['reason'] = 'Stream name empty after normalization'
             return result
 
-        # Find separator
-        separator, sep_pos = self._find_separator(normalized)
-        if not separator:
-            result['reason'] = f'No separator found in: {normalized}'
+        away_part, home_part, split_error = self._split_matchup(normalized)
+        if split_error:
+            result['reason'] = split_error
             return result
 
-        # Split into away and home parts
-        # Convention: "Away vs/at Home" or "Away @ Home"
-        left_part = normalized[:sep_pos].strip()
-        right_part = normalized[sep_pos + len(separator):].strip()
-
-        result['raw_away'] = left_part
-        result['raw_home'] = right_part
-
-        # Handle "at" and "@" - left team is away, right is home
-        # Handle "vs" - left is typically away, right is home
-        # (This matches standard sports notation)
+        result['raw_away'] = away_part
+        result['raw_home'] = home_part
 
         # Find both teams
-        away_team = self._find_team(left_part, league, teams)
-        home_team = self._find_team(right_part, league, teams)
+        away_team = self._find_team(away_part, league, teams)
+        home_team = self._find_team(home_part, league, teams)
 
         if not away_team:
-            result['reason'] = f'Away team not found: {left_part}'
-            result['unmatched_team'] = left_part
+            result['reason'] = f'Away team not found: {away_part}'
+            result['unmatched_team'] = away_part
             return result
 
         if not home_team:
-            result['reason'] = f'Home team not found: {right_part}'
-            result['unmatched_team'] = right_part
+            result['reason'] = f'Home team not found: {home_part}'
+            result['unmatched_team'] = home_part
             return result
 
-        # Both teams found!
+        # Both teams found - populate result
         result['matched'] = True
         result['away_team_id'] = away_team.get('id')
         result['away_team_name'] = away_team.get('name')
@@ -799,7 +782,7 @@ class TeamMatcher:
 
         return result
 
-    def clear_cache(self, league: str = None):
+    def clear_cache(self, league: str = None) -> None:
         """
         Clear the team cache.
 
@@ -831,7 +814,7 @@ class TeamMatcher:
 
 
 # Convenience function for standalone use
-def create_matcher():
+def create_matcher() -> TeamMatcher:
     """
     Create a TeamMatcher instance with default configuration.
 
