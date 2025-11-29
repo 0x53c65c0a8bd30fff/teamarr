@@ -415,6 +415,17 @@ def refresh_event_group_core(group, m3u_manager):
 
                     if channel_results['created']:
                         app.logger.debug(f"Created {len(channel_results['created'])} channels")
+                    if channel_results.get('skipped'):
+                        app.logger.debug(f"Skipped {len(channel_results['skipped'])} channels")
+                        # Log first few skip reasons for debugging
+                        for skip in channel_results['skipped'][:3]:
+                            app.logger.debug(f"  - {skip.get('stream', 'unknown')}: {skip.get('reason', 'no reason')}")
+                    if channel_results.get('existing'):
+                        app.logger.debug(f"Existing {len(channel_results['existing'])} channels")
+                    if channel_results.get('errors'):
+                        app.logger.warning(f"Errors creating {len(channel_results['errors'])} channels")
+                        for err in channel_results['errors'][:3]:
+                            app.logger.warning(f"  - {err.get('stream', 'unknown')}: {err.get('error', 'no error')}")
 
                     # Clean up channels for removed streams
                     stream_ids = [s['id'] for s in streams]
