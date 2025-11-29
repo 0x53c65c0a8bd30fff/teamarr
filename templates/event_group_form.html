@@ -291,16 +291,20 @@ function updateLeagueOptions() {
 
 async function loadChannelGroups() {
     try {
-        const response = await fetch('/api/dispatcharr/channel-groups');
+        const response = await fetch('/api/dispatcharr/channel-groups?exclude_m3u=true');
         const data = await response.json();
 
-        if (data.success) {
+        if (response.ok && data.groups) {
             allChannelGroups = data.groups || [];
             channelGroups = [...allChannelGroups];
             renderChannelGroups();
+        } else {
+            console.error('Failed to load channel groups:', data.error);
+            document.getElementById('channel_group_id').innerHTML = '<option value="">(Failed to load groups)</option>';
         }
     } catch (error) {
         console.error('Error loading channel groups:', error);
+        document.getElementById('channel_group_id').innerHTML = '<option value="">(Error loading groups)</option>';
     }
 }
 
@@ -398,13 +402,17 @@ async function loadStreamProfiles() {
         const response = await fetch('/api/dispatcharr/stream-profiles');
         const data = await response.json();
 
-        if (data.success) {
+        if (response.ok && data.profiles) {
             allStreamProfiles = data.profiles || [];
             streamProfiles = [...allStreamProfiles];
             renderStreamProfiles();
+        } else {
+            console.error('Failed to load stream profiles:', data.error);
+            document.getElementById('stream_profile_id').innerHTML = '<option value="">(Failed to load profiles)</option>';
         }
     } catch (error) {
         console.error('Error loading stream profiles:', error);
+        document.getElementById('stream_profile_id').innerHTML = '<option value="">(Error loading profiles)</option>';
     }
 }
 
