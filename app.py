@@ -152,6 +152,7 @@ def refresh_event_group_core(group, m3u_manager):
     from epg.event_epg_generator import generate_event_epg
     from epg.epg_consolidator import get_data_dir, after_event_epg_generation
     from database import get_template, update_event_epg_group_stats
+    from utils.stream_filter import filter_game_streams
 
     group_id = group['id']
 
@@ -175,8 +176,20 @@ def refresh_event_group_core(group, m3u_manager):
             }
 
         # Step 2: Fetch streams
-        streams = m3u_manager.list_streams(group_name=group['group_name'])
-        app.logger.debug(f"Fetched {len(streams)} streams for group '{group['group_name']}'")
+        all_streams = m3u_manager.list_streams(group_name=group['group_name'])
+        total_stream_count = len(all_streams)
+        app.logger.debug(f"Fetched {total_stream_count} streams for group '{group['group_name']}'")
+
+        # Step 2.5: Filter to game streams only (must have vs/@/at indicator)
+        filter_result = filter_game_streams(
+            all_streams,
+            exclude_regex=group.get('stream_exclude_regex')
+        )
+        streams = filter_result['game_streams']
+        filtered_count = len(filter_result['filtered_streams'])
+
+        if filtered_count > 0:
+            app.logger.debug(f"Filtered {filtered_count} non-game streams, {len(streams)} game streams remain")
 
         # Step 3: Match streams to ESPN events
         team_matcher = create_matcher()
@@ -232,16 +245,24 @@ def refresh_event_group_core(group, m3u_manager):
                 app.logger.warning(f"Error matching stream '{stream['name']}': {e}")
                 continue
 
-        # Update stats
-        update_event_epg_group_stats(group_id, len(streams), matched_count)
-        app.logger.debug(f"Matched {matched_count}/{len(streams)} streams for group '{group['group_name']}'")
+        # Update stats (use game stream count, not total)
+        game_stream_count = len(streams)
+        update_event_epg_group_stats(group_id, game_stream_count, matched_count)
+
+        # Log with filtering info
+        if filtered_count > 0:
+            app.logger.debug(f"Matched {matched_count}/{game_stream_count} game streams for group '{group['group_name']}' ({filtered_count} non-game filtered)")
+        else:
+            app.logger.debug(f"Matched {matched_count}/{game_stream_count} streams for group '{group['group_name']}'")
 
         # Check if template is assigned
         if not group.get('event_template_id'):
             app.logger.debug(f"No template assigned to group '{group['group_name']}' - skipping EPG generation")
             return {
                 'success': False,
-                'stream_count': len(streams),
+                'total_stream_count': total_stream_count,
+                'stream_count': game_stream_count,
+                'filtered_count': filtered_count,
                 'matched_count': matched_count,
                 'matched_streams': [],
                 'error': 'No event template assigned to this group'
@@ -339,7 +360,9 @@ def refresh_event_group_core(group, m3u_manager):
 
         return {
             'success': True,
-            'stream_count': len(streams),
+            'total_stream_count': total_stream_count,
+            'stream_count': game_stream_count,
+            'filtered_count': filtered_count,
             'matched_count': matched_count,
             'matched_streams': matched_streams,
             'epg_result': epg_result,

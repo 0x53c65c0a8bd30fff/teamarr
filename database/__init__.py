@@ -309,6 +309,7 @@ def run_migrations(conn):
             ("custom_regex_teams", "TEXT"),  # Combined pattern with (?P<team1>...) and (?P<team2>...)
             ("custom_regex_date", "TEXT"),
             ("custom_regex_time", "TEXT"),
+            ("stream_exclude_regex", "TEXT"),  # User regex to exclude streams from matching
         ]
         add_columns_if_missing("event_epg_groups", event_group_columns)
 
@@ -1059,7 +1060,8 @@ def create_event_epg_group(
     custom_regex_enabled: bool = False,
     custom_regex_teams: str = None,
     custom_regex_date: str = None,
-    custom_regex_time: str = None
+    custom_regex_time: str = None,
+    stream_exclude_regex: str = None
 ) -> int:
     """
     Create a new event EPG group.
@@ -1075,6 +1077,7 @@ def create_event_epg_group(
         custom_regex_teams: Combined regex with (?P<team1>...) and (?P<team2>...) groups
         custom_regex_date: Optional regex pattern to extract game date
         custom_regex_time: Optional regex pattern to extract game time
+        stream_exclude_regex: Optional regex to exclude streams from matching
 
     Returns:
         ID of created group
@@ -1092,8 +1095,9 @@ def create_event_epg_group(
              assigned_league, assigned_sport, enabled, refresh_interval_minutes,
              event_template_id, account_name, channel_start, channel_group_id,
              stream_profile_id, custom_regex, custom_regex_enabled,
-             custom_regex_teams, custom_regex_date, custom_regex_time)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             custom_regex_teams, custom_regex_date, custom_regex_time,
+             stream_exclude_regex)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 dispatcharr_group_id, dispatcharr_account_id, group_name,
@@ -1102,7 +1106,8 @@ def create_event_epg_group(
                 event_template_id, account_name, channel_start,
                 channel_group_id, stream_profile_id, custom_regex,
                 1 if custom_regex_enabled else 0,
-                custom_regex_teams, custom_regex_date, custom_regex_time
+                custom_regex_teams, custom_regex_date, custom_regex_time,
+                stream_exclude_regex
             )
         )
         conn.commit()

@@ -150,6 +150,20 @@
             </div>
         </div>
 
+        <!-- Stream Filtering Section -->
+        <div class="form-section">
+            <h2>Stream Filtering</h2>
+            <p class="section-description">Streams are automatically filtered to only include game streams (those with vs, @, or at). Use the exclusion pattern below to filter out additional streams.</p>
+
+            <div class="form-group">
+                <label for="stream_exclude_regex">Exclusion Pattern <span class="optional">(optional)</span></label>
+                <input type="text" id="stream_exclude_regex" name="stream_exclude_regex" class="form-control mono regex-input"
+                       placeholder="e.g., \(ES\)|\(ALT\)|All.?Star"
+                       value="{{ group.stream_exclude_regex if group else '' }}">
+                <small class="form-help">Regex pattern to exclude streams that match. Applied after built-in game detection.</small>
+            </div>
+        </div>
+
         <!-- Custom Regex Section -->
         <div class="form-section">
             <h2>Custom Team Matching</h2>
