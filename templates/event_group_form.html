@@ -131,58 +131,21 @@
 
             <div class="form-group">
                 <label for="stream_profile_id">Stream Profile</label>
-                <div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem;">
-                    <input type="text" id="profile-filter" class="form-control" placeholder="Filter profiles..." style="flex: 1;" oninput="filterStreamProfiles()">
-                    <button type="button" class="btn btn-sm btn-secondary" onclick="toggleCreateProfileForm()">+ New</button>
-                </div>
-                <div id="create-profile-form" style="display: none; margin-bottom: 0.5rem; padding: 0.5rem; background: var(--bg-tertiary); border-radius: 4px;">
-                    <div style="display: flex; gap: 0.5rem; align-items: center;">
-                        <input type="text" id="new-profile-name" class="form-control" placeholder="New profile name..." style="flex: 1;">
-                        <button type="button" class="btn btn-sm btn-success" onclick="createProfileInline()">Create</button>
-                        <button type="button" class="btn btn-sm btn-secondary" onclick="toggleCreateProfileForm()">Cancel</button>
-                    </div>
-                    <div id="create-profile-status" style="margin-top: 0.25rem; font-size: 0.75rem;"></div>
+                <div style="margin-bottom: 0.5rem;">
+                    <input type="text" id="profile-filter" class="form-control" placeholder="Filter profiles..." oninput="filterStreamProfiles()">
                 </div>
                 <select id="stream_profile_id" name="stream_profile_id" class="form-control" size="4" style="height: auto;">
                     <option value="">Loading profiles...</option>
                 </select>
-                <small class="form-help">Stream profile to use for created channels. Defines how streams are processed.</small>
+                <small class="form-help">Leave blank to use default.</small>
             </div>
-        </div>
 
-        <!-- Stream Filtering Section (Collapsible) -->
-        <div class="form-section collapsible-section">
-            <h2 class="collapsible-header" onclick="toggleSection('stream-filtering')">
-                <span class="collapse-arrow" id="stream-filtering-arrow">▶</span>
-                Stream Filtering
-            </h2>
-            <div id="stream-filtering-content" class="collapsible-content" style="display: none;">
-                <p class="section-description">Streams are automatically filtered to only include game streams (those with vs, @, or at). Customize below.</p>
-
-                <div class="form-group">
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="skip_builtin_filter" name="skip_builtin_filter"
-                               {% if group and group.skip_builtin_filter %}checked{% endif %}>
-                        <span>Skip built-in game detection</span>
-                    </label>
-                    <small class="form-help">Disable automatic filtering when stream names don't use standard separators (vs, @, at).</small>
-                </div>
-
-                <div class="form-group regex-field-group">
-                    <div class="regex-field-header">
-                        <label class="checkbox-label">
-                            <input type="checkbox" id="stream_exclude_regex_enabled" name="stream_exclude_regex_enabled"
-                                   {% if group and group.stream_exclude_regex_enabled %}checked{% endif %}
-                                   onchange="toggleRegexField('stream_exclude_regex')">
-                            <span>Exclusion Pattern</span>
-                        </label>
-                    </div>
-                    <input type="text" id="stream_exclude_regex" name="stream_exclude_regex"
-                           class="form-control mono regex-input {% if not group or not group.stream_exclude_regex_enabled %}disabled-field{% endif %}"
-                           placeholder="e.g., \(ES\)|\(ALT\)|All.?Star"
-                           value="{{ group.stream_exclude_regex if group else '' }}"
-                           {% if not group or not group.stream_exclude_regex_enabled %}disabled{% endif %}>
-                </div>
+            <div class="form-group">
+                <label for="channel_profile_id">Channel Profile</label>
+                <select id="channel_profile_id" name="channel_profile_id" class="form-control">
+                    <option value="">Loading profiles...</option>
+                </select>
+                <small class="form-help">Add created channels to this profile. Leave blank to skip.</small>
             </div>
         </div>
 
@@ -190,12 +153,46 @@
         <div class="form-section collapsible-section">
             <h2 class="collapsible-header" onclick="toggleSection('custom-regex')">
                 <span class="collapse-arrow" id="custom-regex-arrow">▶</span>
-                Custom Team Matching
+                Custom Regex
             </h2>
             <div id="custom-regex-content" class="collapsible-content" style="display: none;">
-                <p class="section-description">Override built-in matching with custom regex patterns. Enable individual fields as needed.</p>
 
-                <div class="regex-builder-section">
+                <!-- Stream Filtering Subsection -->
+                <div class="subsection">
+                    <h3 class="subsection-header">Stream Filtering</h3>
+                    <p class="section-description">Streams are automatically filtered to only include game streams (those with vs, @, or at).</p>
+
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="skip_builtin_filter" name="skip_builtin_filter"
+                                   {% if group and group.skip_builtin_filter %}checked{% endif %}>
+                            <span>Skip built-in game detection</span>
+                        </label>
+                        <small class="form-help">Disable automatic filtering when stream names don't use standard separators (vs, @, at).</small>
+                    </div>
+
+                    <div class="form-group regex-field-group">
+                        <div class="regex-field-header">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="stream_exclude_regex_enabled" name="stream_exclude_regex_enabled"
+                                       {% if group and group.stream_exclude_regex_enabled %}checked{% endif %}
+                                       onchange="toggleRegexField('stream_exclude_regex')">
+                                <span>Exclusion Pattern</span>
+                            </label>
+                        </div>
+                        <input type="text" id="stream_exclude_regex" name="stream_exclude_regex"
+                               class="form-control mono regex-input {% if not group or not group.stream_exclude_regex_enabled %}disabled-field{% endif %}"
+                               placeholder="e.g., \(ES\)|\(ALT\)|All.?Star"
+                               value="{{ group.stream_exclude_regex if group else '' }}"
+                               {% if not group or not group.stream_exclude_regex_enabled %}disabled{% endif %}>
+                    </div>
+                </div>
+
+                <!-- Custom Team Matching Subsection -->
+                <div class="subsection">
+                    <h3 class="subsection-header">Team Matching</h3>
+                    <p class="section-description">Override built-in matching with custom regex patterns. Enable individual fields as needed.</p>
+
                     <div class="form-group regex-field-group">
                         <div class="regex-field-header">
                             <label class="checkbox-label">
@@ -207,7 +204,7 @@
                         </div>
                         <input type="text" id="custom_regex_teams" name="custom_regex_teams"
                                class="form-control mono regex-input {% if not group or not group.custom_regex_teams_enabled %}disabled-field{% endif %}"
-                               placeholder="(?P<team1>...)(?P<team2>...)"
+                               placeholder="(?P<team1>[A-Z]{2,3})\s*[@vs]+\s*(?P<team2>[A-Z]{2,3})"
                                value="{{ group.custom_regex_teams if group else '' }}"
                                {% if not group or not group.custom_regex_teams_enabled %}disabled{% endif %}>
                     </div>
@@ -224,7 +221,7 @@
                             </div>
                             <input type="text" id="custom_regex_date" name="custom_regex_date"
                                    class="form-control mono regex-input {% if not group or not group.custom_regex_date_enabled %}disabled-field{% endif %}"
-                                   placeholder="(?P<date>...)"
+                                   placeholder="(?P<date>\d{1,2}/\d{1,2})"
                                    value="{{ group.custom_regex_date if group else '' }}"
                                    {% if not group or not group.custom_regex_date_enabled %}disabled{% endif %}>
                         </div>
@@ -240,7 +237,7 @@
                             </div>
                             <input type="text" id="custom_regex_time" name="custom_regex_time"
                                    class="form-control mono regex-input {% if not group or not group.custom_regex_time_enabled %}disabled-field{% endif %}"
-                                   placeholder="(?P<time>...)"
+                                   placeholder="(?P<time>\d{1,2}:\d{2}\s*(?:AM|PM)?)"
                                    value="{{ group.custom_regex_time if group else '' }}"
                                    {% if not group or not group.custom_regex_time_enabled %}disabled{% endif %}>
                         </div>
@@ -277,14 +274,20 @@ let allChannelGroups = [];
 let streamProfiles = [];
 let allStreamProfiles = [];
 
+// Channel profiles data
+let channelProfiles = [];
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', async function() {
-    await Promise.all([loadChannelGroups(), loadStreamProfiles()]);
+    await Promise.all([loadChannelGroups(), loadStreamProfiles(), loadChannelProfiles()]);
     {% if mode == 'edit' and group.channel_group_id %}
     document.getElementById('channel_group_id').value = '{{ group.channel_group_id }}';
     {% endif %}
     {% if mode == 'edit' and group.stream_profile_id %}
     document.getElementById('stream_profile_id').value = '{{ group.stream_profile_id }}';
+    {% endif %}
+    {% if mode == 'edit' and group.channel_profile_id %}
+    document.getElementById('channel_profile_id').value = '{{ group.channel_profile_id }}';
     {% endif %}
 });
 
@@ -486,7 +489,7 @@ function renderStreamProfiles() {
     const select = document.getElementById('stream_profile_id');
     const currentValue = select.value;
 
-    select.innerHTML = '<option value="">&lt;No profile assignment&gt;</option>';
+    select.innerHTML = '';
 
     streamProfiles.forEach(profile => {
         const option = document.createElement('option');
@@ -515,50 +518,39 @@ function filterStreamProfiles() {
     renderStreamProfiles();
 }
 
-function toggleCreateProfileForm() {
-    const form = document.getElementById('create-profile-form');
-    form.style.display = form.style.display === 'none' ? 'block' : 'none';
-    if (form.style.display === 'block') {
-        document.getElementById('new-profile-name').focus();
+async function loadChannelProfiles() {
+    try {
+        const response = await fetch('/api/dispatcharr/channel-profiles');
+        const data = await response.json();
+
+        if (response.ok && data.profiles) {
+            channelProfiles = data.profiles || [];
+            renderChannelProfiles();
+        } else {
+            console.error('Failed to load channel profiles:', data.error);
+            document.getElementById('channel_profile_id').innerHTML = '<option value="">(Failed to load profiles)</option>';
+        }
+    } catch (error) {
+        console.error('Error loading channel profiles:', error);
+        document.getElementById('channel_profile_id').innerHTML = '<option value="">(Error loading profiles)</option>';
     }
 }
 
-async function createProfileInline() {
-    const name = document.getElementById('new-profile-name').value.trim();
-    const statusDiv = document.getElementById('create-profile-status');
+function renderChannelProfiles() {
+    const select = document.getElementById('channel_profile_id');
+    const currentValue = select.value;
 
-    if (!name) {
-        statusDiv.innerHTML = '<span style="color: var(--danger);">Please enter a profile name</span>';
-        return;
-    }
+    select.innerHTML = '';
 
-    statusDiv.innerHTML = '<span style="color: var(--text-muted);">Creating...</span>';
+    channelProfiles.forEach(profile => {
+        const option = document.createElement('option');
+        option.value = profile.id;
+        option.textContent = profile.name;
+        select.appendChild(option);
+    });
 
-    try {
-        const response = await fetch('/api/dispatcharr/stream-profiles', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: name })
-        });
-
-        const data = await response.json();
-
-        if (data.success) {
-            statusDiv.innerHTML = '<span style="color: var(--success);">Created!</span>';
-            document.getElementById('new-profile-name').value = '';
-
-            // Reload profiles and select the new one
-            await loadStreamProfiles();
-            document.getElementById('stream_profile_id').value = data.profile.id;
-
-            setTimeout(() => {
-                toggleCreateProfileForm();
-            }, 500);
-        } else {
-            statusDiv.innerHTML = `<span style="color: var(--danger);">${data.error || 'Failed to create profile'}</span>`;
-        }
-    } catch (error) {
-        statusDiv.innerHTML = `<span style="color: var(--danger);">Error: ${error.message}</span>`;
+    if (currentValue) {
+        select.value = currentValue;
     }
 }
 
@@ -677,7 +669,7 @@ document.getElementById('event-group-form').addEventListener('submit', async fun
     formData.forEach((value, key) => {
         if (value !== '' && value !== null) {
             // Convert numeric fields
-            if (['channel_start', 'channel_group_id', 'stream_profile_id', 'event_template_id', 'dispatcharr_group_id', 'dispatcharr_account_id'].includes(key)) {
+            if (['channel_start', 'channel_group_id', 'stream_profile_id', 'channel_profile_id', 'event_template_id', 'dispatcharr_group_id', 'dispatcharr_account_id'].includes(key)) {
                 data[key] = value ? parseInt(value) : null;
             } else if (checkboxFields.includes(key)) {
                 data[key] = true;
@@ -876,8 +868,21 @@ select.form-control {
 }
 
 .regex-input {
-    background: var(--bg-primary) !important;
-    border: 1px solid var(--border) !important;
+    background: var(--bg-secondary) !important;
+    border: 2px solid var(--border) !important;
+    padding: 0.6rem 0.75rem !important;
+    font-size: 0.9rem;
+}
+
+.regex-input:focus {
+    border-color: var(--primary) !important;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(var(--primary-rgb), 0.2);
+}
+
+.regex-input::placeholder {
+    color: var(--text-muted);
+    opacity: 0.7;
 }
 
 /* Collapsible sections */
@@ -900,6 +905,28 @@ select.form-control {
 
 .collapsible-content {
     margin-top: 1rem;
+}
+
+/* Subsections within collapsible */
+.subsection {
+    padding: 1rem 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.subsection:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+}
+
+.subsection:first-child {
+    padding-top: 0;
+}
+
+.subsection-header {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0 0 0.5rem 0;
 }
 
 /* Regex field with enable checkbox */

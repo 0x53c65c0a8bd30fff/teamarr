@@ -3010,6 +3010,41 @@ def api_dispatcharr_stream_profiles_create():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/dispatcharr/channel-profiles', methods=['GET'])
+def api_dispatcharr_channel_profiles():
+    """
+    Get all channel profiles from Dispatcharr.
+
+    Channel profiles group channels together for organization/filtering.
+    """
+    from api.dispatcharr_client import ChannelManager
+
+    try:
+        conn = get_connection()
+        settings = dict(conn.execute("SELECT * FROM settings WHERE id = 1").fetchone())
+        conn.close()
+
+        if not settings.get('dispatcharr_url'):
+            return jsonify({'error': 'Dispatcharr not configured'}), 400
+
+        channel_mgr = ChannelManager(
+            settings['dispatcharr_url'],
+            settings['dispatcharr_username'],
+            settings['dispatcharr_password']
+        )
+
+        profiles = channel_mgr.get_channel_profiles()
+
+        return jsonify({
+            'success': True,
+            'profiles': profiles
+        })
+
+    except Exception as e:
+        app.logger.error(f"Error fetching channel profiles: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/event-epg/groups', methods=['GET'])
 def api_event_epg_groups_list():
     """List all event EPG groups configured in Teamarr."""
@@ -3073,6 +3108,8 @@ def api_event_epg_groups_create():
             account_name=data.get('account_name'),
             channel_start=data.get('channel_start'),
             channel_group_id=data.get('channel_group_id'),
+            stream_profile_id=data.get('stream_profile_id'),
+            channel_profile_id=data.get('channel_profile_id'),
             custom_regex=data.get('custom_regex'),
             custom_regex_enabled=bool(data.get('custom_regex_enabled')),
             custom_regex_teams=data.get('custom_regex_teams'),

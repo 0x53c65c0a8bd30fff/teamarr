@@ -598,26 +598,33 @@ class ChannelLifecycleManager:
         existing: Dict,
         group: Dict,
         results: Dict,
-        current_stream: Dict = None
+        current_stream: Dict = None,
+        event: Dict = None,
+        template: Dict = None,
+        template_engine = None
     ) -> None:
         """
-        Sync channel settings (channel_group_id, stream_profile_id, streams) from group to channel.
+        Sync channel settings (name, channel_group_id, stream_profile_id, streams) from group to channel.
 
         If group settings differ from the channel's current settings in Dispatcharr,
         update the channel to match the group configuration.
 
-        Also syncs the stream assignment - M3U stream IDs can change when the provider
-        refreshes their playlist, so we always ensure the current matched stream is assigned.
+        Also syncs:
+        - Channel name (if template changed)
+        - Stream assignment (M3U stream IDs can change on refresh)
 
         Args:
             existing: Existing managed channel record
             group: Event EPG group configuration
             results: Results dict to append updates
             current_stream: Current matched stream from M3U (optional, for stream sync)
+            event: ESPN event data (optional, for channel name resolution)
+            template: Event template (optional, for channel name resolution)
+            template_engine: EventTemplateEngine instance (optional, for channel name resolution)
         """
         try:
             dispatcharr_channel_id = existing['dispatcharr_channel_id']
-            channel_name = existing.get('channel_name', 'Unknown')
+            stored_channel_name = existing.get('channel_name', 'Unknown')
 
             # Get current channel data from Dispatcharr
             current_channel = self.channel_api.get_channel(dispatcharr_channel_id)
@@ -627,6 +634,62 @@ class ChannelLifecycleManager:
 
             # Build update payload if there are differences
             update_data = {}
+
+            # Check channel name - resolve from template and compare
+            if event and template and template_engine:
+                new_channel_name = generate_channel_name(
+                    event,
+                    template=template,
+                    template_engine=template_engine,
+                    timezone=self.timezone
+                )
+                current_dispatcharr_name = current_channel.get('name', '')
+
+                if new_channel_name and new_channel_name != current_dispatcharr_name:
+                    update_data['name'] = new_channel_name
+
+                    # Also update our managed_channels record
+                    from database import update_managed_channel
+                    update_managed_channel(existing['id'], {'channel_name': new_channel_name})
+
+                    # Track name change in results
+                    if 'name_updated' not in results:
+                        results['name_updated'] = []
+                    results['name_updated'].append({
+                        'channel_id': dispatcharr_channel_id,
+                        'old_name': current_dispatcharr_name,
+                        'new_name': new_channel_name
+                    })
+                    logger.info(f"Channel name updated: '{current_dispatcharr_name}' -> '{new_channel_name}'")
+
+            # Check channel number - reassign if outside current group range
+            channel_start = group.get('channel_start')
+            current_channel_number = existing.get('channel_number')
+            current_dispatcharr_number = current_channel.get('channel_number')
+
+            if channel_start and current_channel_number and current_channel_number < channel_start:
+                # Channel number is below the new range - need to reassign
+                from database import get_next_channel_number, update_managed_channel
+                new_channel_number = get_next_channel_number(group['id'])
+
+                if new_channel_number:
+                    update_data['channel_number'] = new_channel_number
+
+                    # Update our managed_channels record
+                    update_managed_channel(existing['id'], {'channel_number': new_channel_number})
+
+                    # Track in results
+                    if 'number_updated' not in results:
+                        results['number_updated'] = []
+                    results['number_updated'].append({
+                        'channel_id': dispatcharr_channel_id,
+                        'old_number': current_channel_number,
+                        'new_number': new_channel_number
+                    })
+                    logger.info(
+                        f"Channel number reassigned: {current_channel_number} -> {new_channel_number} "
+                        f"(group start now {channel_start})"
+                    )
 
             # Check channel_group_id
             group_channel_group_id = group.get('channel_group_id')
@@ -653,27 +716,77 @@ class ChannelLifecycleManager:
                     from database import update_managed_channel
                     update_managed_channel(existing['id'], {'dispatcharr_stream_id': new_stream_id})
 
+            # Check channel_profile_id (handled separately - profiles maintain channel lists)
+            group_channel_profile_id = group.get('channel_profile_id')
+            stored_channel_profile_id = existing.get('channel_profile_id')
+
+            if group_channel_profile_id != stored_channel_profile_id:
+                from database import update_managed_channel
+                profile_changed = False
+
+                # Remove from old profile if there was one
+                if stored_channel_profile_id:
+                    remove_result = self.channel_api.remove_channel_from_profile(
+                        stored_channel_profile_id, dispatcharr_channel_id
+                    )
+                    if remove_result.get('success'):
+                        logger.debug(f"Removed channel {dispatcharr_channel_id} from profile {stored_channel_profile_id}")
+                        profile_changed = True
+                    else:
+                        logger.warning(
+                            f"Failed to remove channel {dispatcharr_channel_id} from profile {stored_channel_profile_id}: "
+                            f"{remove_result.get('error')}"
+                        )
+
+                # Add to new profile if there is one
+                if group_channel_profile_id:
+                    add_result = self.channel_api.add_channel_to_profile(
+                        group_channel_profile_id, dispatcharr_channel_id
+                    )
+                    if add_result.get('success'):
+                        logger.debug(f"Added channel {dispatcharr_channel_id} to profile {group_channel_profile_id}")
+                        profile_changed = True
+                    else:
+                        logger.warning(
+                            f"Failed to add channel {dispatcharr_channel_id} to profile {group_channel_profile_id}: "
+                            f"{add_result.get('error')}"
+                        )
+
+                # Update our record with the new profile ID
+                if profile_changed:
+                    update_managed_channel(existing['id'], {'channel_profile_id': group_channel_profile_id})
+
+                    # Track in results
+                    if 'profile_updated' not in results:
+                        results['profile_updated'] = []
+                    results['profile_updated'].append({
+                        'channel_name': stored_channel_name,
+                        'channel_id': dispatcharr_channel_id,
+                        'old_profile': stored_channel_profile_id,
+                        'new_profile': group_channel_profile_id
+                    })
+
             if not update_data:
-                return  # No changes needed
+                return  # No channel property changes needed
 
             # Update channel in Dispatcharr
             update_result = self.channel_api.update_channel(dispatcharr_channel_id, update_data)
 
             if update_result.get('success'):
                 changes = ', '.join(f"{k}={v}" for k, v in update_data.items())
-                logger.info(f"Synced settings for '{channel_name}': {changes}")
+                logger.info(f"Synced settings for '{stored_channel_name}': {changes}")
 
                 # Track in results
                 if 'settings_updated' not in results:
                     results['settings_updated'] = []
                 results['settings_updated'].append({
-                    'channel_name': channel_name,
+                    'channel_name': stored_channel_name,
                     'channel_id': dispatcharr_channel_id,
                     'changes': update_data
                 })
             else:
                 logger.warning(
-                    f"Failed to sync settings for '{channel_name}': "
+                    f"Failed to sync settings for '{stored_channel_name}': "
                     f"{update_result.get('error')}"
                 )
 
@@ -724,6 +837,7 @@ class ChannelLifecycleManager:
         channel_start = group.get('channel_start')
         channel_group_id = group.get('channel_group_id')  # Dispatcharr channel group
         stream_profile_id = group.get('stream_profile_id')  # Dispatcharr stream profile
+        channel_profile_id = group.get('channel_profile_id')  # Dispatcharr channel profile
         create_timing = group.get('channel_create_timing') or global_settings['channel_create_timing']
         delete_timing = group.get('channel_delete_timing') or global_settings['channel_delete_timing']
         sport = group.get('assigned_sport')
@@ -759,9 +873,14 @@ class ChannelLifecycleManager:
                     'channel_number': existing['channel_number']
                 })
 
-                # Sync channel settings (group, profile, stream) if they've changed
-                # Pass current_stream to handle M3U stream ID changes
-                self._sync_channel_settings(existing, group, results, current_stream=stream)
+                # Sync channel settings (name, group, profile, stream) if they've changed
+                self._sync_channel_settings(
+                    existing, group, results,
+                    current_stream=stream,
+                    event=event,
+                    template=template,
+                    template_engine=template_engine
+                )
 
                 # Check if logo needs updating for existing channel
                 if template and template.get('channel_logo_url'):
@@ -848,6 +967,19 @@ class ChannelLifecycleManager:
             dispatcharr_channel = create_result['channel']
             dispatcharr_channel_id = dispatcharr_channel['id']
 
+            # Add to channel profile if configured
+            if channel_profile_id:
+                profile_result = self.channel_api.add_channel_to_profile(
+                    channel_profile_id, dispatcharr_channel_id
+                )
+                if not profile_result.get('success'):
+                    logger.warning(
+                        f"Failed to add channel {dispatcharr_channel_id} to profile {channel_profile_id}: "
+                        f"{profile_result.get('error')}"
+                    )
+                else:
+                    logger.debug(f"Added channel {dispatcharr_channel_id} to profile {channel_profile_id}")
+
             # Note: EPG association happens AFTER EPG refresh in Dispatcharr
             # See associate_epg_with_channels() method
 
@@ -871,7 +1003,8 @@ class ChannelLifecycleManager:
                     home_team=home_team,
                     away_team=away_team,
                     scheduled_delete_at=delete_at.isoformat() if delete_at else None,
-                    dispatcharr_logo_id=logo_id  # Track logo for cleanup on deletion
+                    dispatcharr_logo_id=logo_id,  # Track logo for cleanup on deletion
+                    channel_profile_id=channel_profile_id  # Track profile for cleanup on change
                 )
 
                 results['created'].append({

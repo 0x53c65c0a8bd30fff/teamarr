@@ -302,6 +302,7 @@ def run_migrations(conn):
             ("account_name", "TEXT"),
             ("channel_group_id", "INTEGER"),
             ("stream_profile_id", "INTEGER"),
+            ("channel_profile_id", "INTEGER"),
             ("custom_regex", "TEXT"),  # Deprecated - legacy single regex
             ("custom_regex_enabled", "INTEGER DEFAULT 0"),  # Deprecated - use individual enables
             ("custom_regex_team1", "TEXT"),  # Deprecated - use custom_regex_teams
@@ -380,7 +381,8 @@ def run_migrations(conn):
         # Add columns if missing
         add_columns_if_missing("managed_channels", [
             ("dispatcharr_logo_id", "INTEGER"),
-            ("logo_deleted", "INTEGER")  # 1=deleted, 0=failed to delete, NULL=no logo was present
+            ("logo_deleted", "INTEGER"),  # 1=deleted, 0=failed to delete, NULL=no logo was present
+            ("channel_profile_id", "INTEGER")  # Track which channel profile the channel was added to
         ])
 
     # =========================================================================
@@ -1061,6 +1063,7 @@ def create_event_epg_group(
     channel_start: int = None,
     channel_group_id: int = None,
     stream_profile_id: int = None,
+    channel_profile_id: int = None,
     custom_regex: str = None,
     custom_regex_enabled: bool = False,
     custom_regex_teams: str = None,
@@ -1082,6 +1085,7 @@ def create_event_epg_group(
         channel_start: Starting channel number for auto-created channels
         channel_group_id: Dispatcharr channel group ID to assign created channels to
         stream_profile_id: Dispatcharr stream profile ID to assign to created channels
+        channel_profile_id: Dispatcharr channel profile ID to add created channels to
         custom_regex: Legacy single regex pattern (deprecated)
         custom_regex_enabled: Legacy flag (deprecated - use individual enables)
         custom_regex_teams: Combined regex with (?P<team1>...) and (?P<team2>...) groups
@@ -1109,20 +1113,20 @@ def create_event_epg_group(
             (dispatcharr_group_id, dispatcharr_account_id, group_name,
              assigned_league, assigned_sport, enabled, refresh_interval_minutes,
              event_template_id, account_name, channel_start, channel_group_id,
-             stream_profile_id, custom_regex, custom_regex_enabled,
+             stream_profile_id, channel_profile_id, custom_regex, custom_regex_enabled,
              custom_regex_teams, custom_regex_teams_enabled,
              custom_regex_date, custom_regex_date_enabled,
              custom_regex_time, custom_regex_time_enabled,
              stream_exclude_regex, stream_exclude_regex_enabled,
              skip_builtin_filter)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 dispatcharr_group_id, dispatcharr_account_id, group_name,
                 assigned_league.lower(), assigned_sport.lower(),
                 1 if enabled else 0, refresh_interval_minutes,
                 event_template_id, account_name, channel_start,
-                channel_group_id, stream_profile_id, custom_regex,
+                channel_group_id, stream_profile_id, channel_profile_id, custom_regex,
                 1 if custom_regex_enabled else 0,
                 custom_regex_teams, 1 if custom_regex_teams_enabled else 0,
                 custom_regex_date, 1 if custom_regex_date_enabled else 0,
@@ -1280,13 +1284,15 @@ def create_managed_channel(
     home_team: str = None,
     away_team: str = None,
     scheduled_delete_at: str = None,
-    dispatcharr_logo_id: int = None
+    dispatcharr_logo_id: int = None,
+    channel_profile_id: int = None
 ) -> int:
     """
     Create a new managed channel record.
 
     Args:
         dispatcharr_logo_id: Logo ID in Dispatcharr (for cleanup when channel is deleted)
+        channel_profile_id: Channel profile ID the channel was added to (for cleanup on profile change)
 
     Returns:
         ID of created record
@@ -1302,13 +1308,15 @@ def create_managed_channel(
             INSERT INTO managed_channels
             (event_epg_group_id, dispatcharr_channel_id, dispatcharr_stream_id,
              channel_number, channel_name, tvg_id, espn_event_id, event_date,
-             home_team, away_team, scheduled_delete_at, dispatcharr_logo_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             home_team, away_team, scheduled_delete_at, dispatcharr_logo_id,
+             channel_profile_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event_epg_group_id, dispatcharr_channel_id, dispatcharr_stream_id,
                 channel_number, channel_name, tvg_id, espn_event_id, event_date,
-                home_team, away_team, scheduled_delete_at, dispatcharr_logo_id
+                home_team, away_team, scheduled_delete_at, dispatcharr_logo_id,
+                channel_profile_id
             )
         )
         conn.commit()

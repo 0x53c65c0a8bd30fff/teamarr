@@ -1478,3 +1478,107 @@ class ChannelManager:
             return {"success": False, "error": "Profile not found"}
 
         return {"success": False, "error": self._parse_api_error(response)}
+
+    # ========================================================================
+    # Channel Profiles Management
+    # ========================================================================
+
+    def get_channel_profiles(self) -> List[Dict]:
+        """
+        Get all channel profiles from Dispatcharr.
+
+        Channel profiles group channels together for organization/filtering.
+
+        Returns:
+            List of profile dicts with id, name, channels (list of channel IDs)
+        """
+        response = self.auth.get("/api/channels/profiles/")
+        if response is None or response.status_code != 200:
+            logger.error(f"Failed to get channel profiles: {response.status_code if response else 'No response'}")
+            return []
+
+        return response.json()
+
+    def get_channel_profile(self, profile_id: int) -> Optional[Dict]:
+        """
+        Get a single channel profile by ID.
+
+        Args:
+            profile_id: Dispatcharr profile ID
+
+        Returns:
+            Profile dict or None if not found
+        """
+        response = self.auth.get(f"/api/channels/profiles/{profile_id}/")
+        if response and response.status_code == 200:
+            return response.json()
+        return None
+
+    def add_channel_to_profile(self, profile_id: int, channel_id: int) -> Dict[str, Any]:
+        """
+        Add a channel to a channel profile.
+
+        Channel profiles maintain a list of channel IDs. This method fetches the
+        current list, appends the new channel if not already present, and updates.
+
+        Args:
+            profile_id: Dispatcharr channel profile ID
+            channel_id: Dispatcharr channel ID to add
+
+        Returns:
+            Result dict with success or error
+        """
+        # Get current profile
+        profile = self.get_channel_profile(profile_id)
+        if not profile:
+            return {"success": False, "error": f"Channel profile {profile_id} not found"}
+
+        current_channels = profile.get('channels', [])
+
+        # Check if already in profile
+        if channel_id in current_channels:
+            return {"success": True, "message": "Channel already in profile"}
+
+        # Add channel and update
+        updated_channels = current_channels + [channel_id]
+        response = self.auth.request("PATCH", f"/api/channels/profiles/{profile_id}/", {
+            'channels': updated_channels
+        })
+
+        if response and response.status_code == 200:
+            return {"success": True}
+
+        return {"success": False, "error": self._parse_api_error(response)}
+
+    def remove_channel_from_profile(self, profile_id: int, channel_id: int) -> Dict[str, Any]:
+        """
+        Remove a channel from a channel profile.
+
+        Args:
+            profile_id: Dispatcharr channel profile ID
+            channel_id: Dispatcharr channel ID to remove
+
+        Returns:
+            Result dict with success or error
+        """
+        # Get current profile
+        profile = self.get_channel_profile(profile_id)
+        if not profile:
+            return {"success": False, "error": f"Channel profile {profile_id} not found"}
+
+        current_channels = profile.get('channels', [])
+
+        # Check if channel is in profile
+        if channel_id not in current_channels:
+            return {"success": True, "message": "Channel not in profile"}
+
+        # Remove channel and update
+        updated_channels = [ch for ch in current_channels if ch != channel_id]
+        response = self.auth.request("PATCH", f"/api/channels/profiles/{profile_id}/", {
+            'channels': updated_channels
+        })
+
+        if response and response.status_code == 200:
+            return {"success": True}
+
+        return {"success": False, "error": self._parse_api_error(response)}
