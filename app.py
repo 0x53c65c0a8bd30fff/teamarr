@@ -2362,12 +2362,20 @@ def api_epg_stats_live():
                 stats[stat_key]['today_events'].append({
                     'title': title,
                     'start': format_time(start_time, time_fmt, show_tz),
+                    'start_ts': start_time.timestamp(),  # For sorting
                     'channel': programme.get('channel', '')
                 })
 
                 # Live Now: currently in progress
                 if start_time <= now <= stop_time:
                     stats[stat_key]['live_now'] += 1
+
+        # Sort events by start time (earliest first)
+        for key in ['team', 'event']:
+            stats[key]['today_events'].sort(key=lambda e: e.get('start_ts', 0))
+            # Remove the sorting key from response
+            for event in stats[key]['today_events']:
+                event.pop('start_ts', None)
 
         return jsonify({
             'success': True,
