@@ -17,6 +17,100 @@
     </div>
 
     {% if groups %}
+        <!-- Stats Summary Tiles -->
+        {% set stats = namespace(
+            total_streams=0,
+            filtered_no_indicator=0,
+            filtered_exclude_regex=0,
+            filtered_outside_lookahead=0,
+            filtered_final=0,
+            eligible_streams=0,
+            matched_streams=0
+        ) %}
+        {% for group in groups %}
+            {% set stats.total_streams = stats.total_streams + (group.total_stream_count or 0) %}
+            {% set stats.filtered_no_indicator = stats.filtered_no_indicator + (group.filtered_no_indicator or 0) %}
+            {% set stats.filtered_exclude_regex = stats.filtered_exclude_regex + (group.filtered_exclude_regex or 0) %}
+            {% set stats.filtered_outside_lookahead = stats.filtered_outside_lookahead + (group.filtered_outside_lookahead or 0) %}
+            {% set stats.filtered_final = stats.filtered_final + (group.filtered_final or 0) %}
+            {% set stats.eligible_streams = stats.eligible_streams + (group.stream_count or 0) %}
+            {% set stats.matched_streams = stats.matched_streams + (group.matched_count or 0) %}
+        {% endfor %}
+        {% set stats.total_filtered = stats.filtered_no_indicator + stats.filtered_exclude_regex + stats.filtered_outside_lookahead + stats.filtered_final %}
+        {% set stats.match_rate = ((stats.matched_streams / stats.eligible_streams * 100) | round | int) if stats.eligible_streams > 0 else 0 %}
+
+        <h2 class="stats-section-title">📊 Event Groups Analysis</h2>
+        <div class="stats-tiles">
+            <div class="stat-tile" data-tooltip-id="tooltip-total">
+                <div class="stat-value">{{ stats.total_streams }}</div>
+                <div class="stat-label">Total Streams</div>
+                <div class="stat-tooltip" id="tooltip-total">
+                    <div class="tooltip-title">By Event Group</div>
+                    {% for group in groups if (group.total_stream_count or 0) > 0 %}
+                    <div class="tooltip-row">
+                        <span class="tooltip-name">{{ group.group_name|truncate(20) }}</span>
+                        <span class="tooltip-value">{{ group.total_stream_count or 0 }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="stat-tile {% if stats.total_filtered > 0 %}has-filtered{% endif %}" data-tooltip-id="tooltip-filtered">
+                <div class="stat-value">{{ stats.total_filtered }}</div>
+                <div class="stat-label">Filtered</div>
+                <div class="stat-tooltip" id="tooltip-filtered">
+                    <div class="tooltip-title">Filter Breakdown</div>
+                    {% if stats.filtered_no_indicator > 0 %}
+                    <div class="tooltip-row">
+                        <span class="tooltip-name">No game indicator</span>
+                        <span class="tooltip-value">{{ stats.filtered_no_indicator }}</span>
+                    </div>
+                    {% endif %}
+                    {% if stats.filtered_exclude_regex > 0 %}
+                    <div class="tooltip-row">
+                        <span class="tooltip-name">Exclusion regex</span>
+                        <span class="tooltip-value">{{ stats.filtered_exclude_regex }}</span>
+                    </div>
+                    {% endif %}
+                    {% if stats.filtered_outside_lookahead > 0 %}
+                    <div class="tooltip-row">
+                        <span class="tooltip-name">Past events</span>
+                        <span class="tooltip-value">{{ stats.filtered_outside_lookahead }}</span>
+                    </div>
+                    {% endif %}
+                    {% if stats.filtered_final > 0 %}
+                    <div class="tooltip-row">
+                        <span class="tooltip-name">Final (excluded)</span>
+                        <span class="tooltip-value">{{ stats.filtered_final }}</span>
+                    </div>
+                    {% endif %}
+                    <div class="tooltip-row tooltip-total">
+                        <span class="tooltip-name">Total</span>
+                        <span class="tooltip-value">{{ stats.total_filtered }}</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="stat-tile" data-tooltip-id="tooltip-eligible">
+                <div class="stat-value">{{ stats.eligible_streams }}</div>
+                <div class="stat-label">Eligible</div>
+                <div class="stat-tooltip" id="tooltip-eligible">
+                    <div class="tooltip-title">By Event Group</div>
+                    {% for group in groups if (group.stream_count or 0) > 0 %}
+                    <div class="tooltip-row">
+                        <span class="tooltip-name">{{ group.group_name|truncate(20) }}</span>
+                        <span class="tooltip-value">{{ group.stream_count or 0 }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="stat-tile stat-tile-matched">
+                <div class="stat-value">{{ stats.matched_streams }}</div>
+                <div class="stat-label">Matched ({{ stats.match_rate }}%)</div>
+            </div>
+        </div>
+
         <!-- Batch Operations Toolbar -->
         <div class="batch-toolbar">
             <div class="batch-info">
@@ -1472,6 +1566,114 @@ code {
 .light-theme .section-badge {
     background: rgba(59, 130, 246, 0.15);
     color: #1d4ed8;
+}
+
+/* Stats Summary Tiles */
+.stats-section-title {
+    font-size: 1rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    color: var(--text-primary);
+}
+
+.stats-tiles {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.stat-tile {
+    background: var(--bg-tertiary);
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+    position: relative;
+    cursor: default;
+}
+
+.stat-tile[data-tooltip-id] {
+    cursor: help;
+}
+
+.stat-value {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    line-height: 1.2;
+}
+
+.stat-label {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.stat-tile.has-filtered .stat-value {
+    color: var(--warning);
+}
+
+.stat-tile-matched .stat-value {
+    color: var(--success);
+}
+
+/* Stat Tooltip */
+.stat-tooltip {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 0.25rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.5rem;
+    min-width: 180px;
+    z-index: 100;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.stat-tile:hover .stat-tooltip {
+    display: block;
+}
+
+.tooltip-title {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.375rem;
+    padding-bottom: 0.25rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.tooltip-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.75rem;
+    padding: 0.125rem 0;
+}
+
+.tooltip-name {
+    color: var(--text-secondary);
+}
+
+.tooltip-value {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.tooltip-row.tooltip-total {
+    margin-top: 0.25rem;
+    padding-top: 0.25rem;
+    border-top: 1px solid var(--border);
+}
+
+.tooltip-row.tooltip-total .tooltip-name,
+.tooltip-row.tooltip-total .tooltip-value {
+    font-weight: 700;
 }
 </style>
 {% endblock %}

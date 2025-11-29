@@ -21,6 +21,76 @@
     </div>
 
     {% if teams %}
+        <!-- Stats Summary Tiles -->
+        {% set team_stats = namespace(total=0, enabled=0, by_league={}) %}
+        {% for team in teams %}
+            {% set team_stats.total = team_stats.total + 1 %}
+            {% if team.is_active %}
+                {% set team_stats.enabled = team_stats.enabled + 1 %}
+            {% endif %}
+            {% set league = team.league %}
+            {% if league not in team_stats.by_league %}
+                {% set _ = team_stats.by_league.update({league: {'total': 0, 'enabled': 0}}) %}
+            {% endif %}
+            {% set _ = team_stats.by_league[league].update({'total': team_stats.by_league[league].total + 1}) %}
+            {% if team.is_active %}
+                {% set _ = team_stats.by_league[league].update({'enabled': team_stats.by_league[league].enabled + 1}) %}
+            {% endif %}
+        {% endfor %}
+
+        <h2 class="stats-section-title">📊 Teams Analysis</h2>
+        <div class="stats-tiles">
+            <div class="stat-tile" data-tooltip-id="tooltip-configured">
+                <div class="stat-value">{{ team_stats.total }}</div>
+                <div class="stat-label">Configured</div>
+                <div class="stat-tooltip" id="tooltip-configured">
+                    <div class="tooltip-title">By League</div>
+                    {% for league, counts in team_stats.by_league.items()|sort %}
+                    <div class="tooltip-row">
+                        <span class="tooltip-name">{{ league.upper() }}</span>
+                        <span class="tooltip-value">{{ counts.total }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="stat-tile" data-tooltip-id="tooltip-enabled">
+                <div class="stat-value">{{ team_stats.enabled }}</div>
+                <div class="stat-label">Enabled</div>
+                <div class="stat-tooltip" id="tooltip-enabled">
+                    <div class="tooltip-title">By League</div>
+                    {% for league, counts in team_stats.by_league.items()|sort if counts.enabled > 0 %}
+                    <div class="tooltip-row">
+                        <span class="tooltip-name">{{ league.upper() }}</span>
+                        <span class="tooltip-value">{{ counts.enabled }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="stat-tile stat-tile-placeholder" data-tooltip-id="tooltip-games-today">
+                <div class="stat-value">--</div>
+                <div class="stat-label">Games Today</div>
+                <div class="stat-tooltip" id="tooltip-games-today">
+                    <div class="tooltip-title">Coming Soon</div>
+                    <div class="tooltip-row">
+                        <span class="tooltip-name" style="font-style: italic;">Run EPG generation to populate</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="stat-tile stat-tile-placeholder" data-tooltip-id="tooltip-live-now">
+                <div class="stat-value">--</div>
+                <div class="stat-label">Live Now</div>
+                <div class="stat-tooltip" id="tooltip-live-now">
+                    <div class="tooltip-title">Coming Soon</div>
+                    <div class="tooltip-row">
+                        <span class="tooltip-name" style="font-style: italic;">Run EPG generation to populate</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Batch Operations Toolbar (Static) -->
         <div class="batch-toolbar">
             <div class="batch-info">
@@ -962,6 +1032,99 @@ code {
     display: flex;
     gap: 1rem;
     justify-content: flex-end;
+}
+
+/* Stats Summary Tiles */
+.stats-section-title {
+    font-size: 1rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    color: var(--text-primary);
+}
+
+.stats-tiles {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.stat-tile {
+    background: var(--bg-tertiary);
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+    position: relative;
+    cursor: default;
+}
+
+.stat-tile[data-tooltip-id] {
+    cursor: help;
+}
+
+.stat-value {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    line-height: 1.2;
+}
+
+.stat-label {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.stat-tile-placeholder .stat-value {
+    color: var(--text-muted);
+}
+
+/* Stat Tooltip */
+.stat-tooltip {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 0.25rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.5rem;
+    min-width: 160px;
+    z-index: 100;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.stat-tile:hover .stat-tooltip {
+    display: block;
+}
+
+.tooltip-title {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.375rem;
+    padding-bottom: 0.25rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.tooltip-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.75rem;
+    padding: 0.125rem 0;
+}
+
+.tooltip-name {
+    color: var(--text-secondary);
+}
+
+.tooltip-value {
+    font-weight: 600;
+    color: var(--text-primary);
 }
 </style>
 
