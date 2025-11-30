@@ -140,7 +140,7 @@ def populate_missing_channel_group_names():
         from api.dispatcharr_client import ChannelManager
         try:
             channel_manager = ChannelManager(
-                base_url=settings['dispatcharr_url'],
+                url=settings['dispatcharr_url'],
                 username=settings['dispatcharr_username'],
                 password=settings['dispatcharr_password']
             )

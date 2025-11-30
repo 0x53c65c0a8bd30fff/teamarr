@@ -710,14 +710,18 @@ async function bulkDelete() {
 }
 
 async function deleteGroup(groupId, groupName) {
-    if (!confirm(`Disable "${groupName}"? This will stop EPG generation for this group.`)) return;
+    if (!confirm(`Delete "${groupName}"?\n\nThis will also delete all managed channels created for this group.`)) return;
 
     try {
         const response = await fetch(`/api/event-epg/groups/${groupId}`, { method: 'DELETE' });
         const data = await response.json();
 
         if (response.ok) {
-            storeNotification(`Group disabled`, 'success');
+            const channelsDeleted = data.channels_deleted || 0;
+            const msg = channelsDeleted > 0
+                ? `Group "${groupName}" deleted (${channelsDeleted} channel${channelsDeleted !== 1 ? 's' : ''} removed)`
+                : `Group "${groupName}" deleted`;
+            storeNotification(msg, 'success');
             location.reload();
         } else {
             showNotification(`Error: ${data.error}`, 'error');
