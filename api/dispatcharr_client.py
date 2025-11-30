@@ -1103,17 +1103,22 @@ class ChannelManager:
         Returns:
             Result dict with success or error
         """
+        logger.debug(f"Deleting channel {channel_id} from Dispatcharr")
         response = self.auth.request("DELETE", f"/api/channels/channels/{channel_id}/")
 
         if response is None:
+            logger.warning(f"Delete channel {channel_id}: No response from Dispatcharr")
             return {"success": False, "error": self._parse_api_error(response)}
 
         if response.status_code in (200, 204):
+            logger.debug(f"Delete channel {channel_id}: Success (status {response.status_code})")
             return {"success": True}
 
         if response.status_code == 404:
+            logger.debug(f"Delete channel {channel_id}: Not found (already deleted?)")
             return {"success": False, "error": "Channel not found"}
 
+        logger.warning(f"Delete channel {channel_id}: Failed (status {response.status_code})")
         return {"success": False, "error": self._parse_api_error(response)}
 
     def assign_streams(self, channel_id: int, stream_ids: List[int]) -> Dict[str, Any]:
