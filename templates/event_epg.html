@@ -486,7 +486,6 @@ function updateBulkToolbar() {
     const checkboxes = document.querySelectorAll('.group-checkbox:checked');
     const hasSelection = checkboxes.length > 0;
 
-    document.getElementById('btn-bulk-refresh').disabled = !hasSelection;
     document.getElementById('btn-bulk-activate').disabled = !hasSelection;
     document.getElementById('btn-bulk-deactivate').disabled = !hasSelection;
     document.getElementById('btn-bulk-delete').disabled = !hasSelection;
