@@ -4121,22 +4121,29 @@ def api_event_epg_groups_create():
     try:
         data = request.get_json()
 
-        # Check for parent group - child groups inherit sport/league
+        # Check for parent group - child groups inherit settings from parent
         parent_group_id = data.get('parent_group_id')
         if parent_group_id:
             parent = get_event_epg_group(parent_group_id)
             if not parent:
                 return jsonify({'error': 'Parent group not found'}), 404
-            # Inherit sport/league from parent
+            # Child groups inherit sport/league from parent
             data['assigned_sport'] = parent['assigned_sport']
             data['assigned_league'] = parent['assigned_league']
+            # Child groups don't have their own template or channel settings (inherited at runtime)
+            data['event_template_id'] = None
+            data['channel_start'] = None
+            data['channel_group_id'] = None
+            data['channel_group_name'] = None
+            data['stream_profile_id'] = None
+            data['channel_profile_id'] = None
 
         required = ['dispatcharr_group_id', 'dispatcharr_account_id', 'group_name', 'assigned_league', 'assigned_sport']
         for field in required:
             if not data.get(field):
                 return jsonify({'error': f'Missing required field: {field}'}), 400
 
-        # Validate channel_start doesn't exceed Dispatcharr's max
+        # Validate channel_start doesn't exceed Dispatcharr's max (only for independent groups)
         channel_start = data.get('channel_start')
         if channel_start is not None and channel_start > 9999:
             return jsonify({'error': 'Channel start cannot exceed 9999 (Dispatcharr limit)'}), 400
@@ -4146,9 +4153,9 @@ def api_event_epg_groups_create():
         if existing:
             return jsonify({'error': 'Group already configured', 'existing_id': existing['id']}), 409
 
-        # Validate template type - only 'event' templates can be assigned to event groups
+        # Validate template type - only 'event' templates can be assigned (not for child groups)
         event_template_id = data.get('event_template_id')
-        if event_template_id is not None:
+        if event_template_id is not None and not parent_group_id:
             template = get_template(event_template_id)
             if not template:
                 return jsonify({'error': 'Template not found'}), 404
@@ -4165,9 +4172,9 @@ def api_event_epg_groups_create():
             group_name=data['group_name'],
             assigned_league=data['assigned_league'],
             assigned_sport=data['assigned_sport'],
-            event_template_id=event_template_id,
+            event_template_id=data.get('event_template_id'),  # Will be None for child groups
             account_name=data.get('account_name'),
-            channel_start=data.get('channel_start'),
+            channel_start=data.get('channel_start'),  # Will be None for child groups
             channel_group_id=data.get('channel_group_id'),
             channel_group_name=data.get('channel_group_name'),
             stream_profile_id=data.get('stream_profile_id'),
@@ -5599,15 +5606,23 @@ def api_find_orphan_channels():
         conn = get_connection()
         settings = dict(conn.execute("SELECT * FROM settings WHERE id = 1").fetchone())
 
-        # Get known UUIDs and channel IDs
-        rows = conn.execute("""
-            SELECT dispatcharr_channel_id, dispatcharr_uuid
-            FROM managed_channels WHERE deleted_at IS NULL
-        """).fetchall()
+        # Get known UUIDs and channel IDs (handle missing UUID column for older DBs)
+        try:
+            rows = conn.execute("""
+                SELECT dispatcharr_channel_id, dispatcharr_uuid
+                FROM managed_channels WHERE deleted_at IS NULL
+            """).fetchall()
+            known_channel_ids = {row[0] for row in rows if row[0]}
+            known_uuids = {row[1] for row in rows if row[1]}
+        except Exception:
+            # UUID column doesn't exist yet - fall back to channel ID only
+            rows = conn.execute("""
+                SELECT dispatcharr_channel_id
+                FROM managed_channels WHERE deleted_at IS NULL
+            """).fetchall()
+            known_channel_ids = {row[0] for row in rows if row[0]}
+            known_uuids = set()
         conn.close()
-
-        known_channel_ids = {row[0] for row in rows if row[0]}
-        known_uuids = {row[1] for row in rows if row[1]}
 
         if not settings.get('dispatcharr_enabled'):
             return jsonify({'error': 'Dispatcharr not configured'}), 400
@@ -5677,15 +5692,23 @@ def api_cleanup_orphan_channels():
         conn = get_connection()
         settings = dict(conn.execute("SELECT * FROM settings WHERE id = 1").fetchone())
 
-        # Get known UUIDs and channel IDs
-        rows = conn.execute("""
-            SELECT dispatcharr_channel_id, dispatcharr_uuid
-            FROM managed_channels WHERE deleted_at IS NULL
-        """).fetchall()
+        # Get known UUIDs and channel IDs (handle missing UUID column for older DBs)
+        try:
+            rows = conn.execute("""
+                SELECT dispatcharr_channel_id, dispatcharr_uuid
+                FROM managed_channels WHERE deleted_at IS NULL
+            """).fetchall()
+            known_channel_ids = {row[0] for row in rows if row[0]}
+            known_uuids = {row[1] for row in rows if row[1]}
+        except Exception:
+            # UUID column doesn't exist yet - fall back to channel ID only
+            rows = conn.execute("""
+                SELECT dispatcharr_channel_id
+                FROM managed_channels WHERE deleted_at IS NULL
+            """).fetchall()
+            known_channel_ids = {row[0] for row in rows if row[0]}
+            known_uuids = set()
         conn.close()
-
-        known_channel_ids = {row[0] for row in rows if row[0]}
-        known_uuids = {row[1] for row in rows if row[1]}
 
         if not settings.get('dispatcharr_enabled'):
             return jsonify({'error': 'Dispatcharr not configured'}), 400

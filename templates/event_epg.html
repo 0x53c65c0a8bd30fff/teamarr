@@ -259,14 +259,18 @@
                                 {% endif %}
                             </td>
                             <td>
-                                {% if group.event_template_name %}
+                                {% if group.parent_group_id %}
+                                    <span class="badge badge-inherited" title="Inherited from parent group">↳ inherited</span>
+                                {% elif group.event_template_name %}
                                     <span class="badge badge-success">{{ group.event_template_name }}</span>
                                 {% else %}
                                     <span class="badge badge-warning" title="EPG will not be generated without a template" style="cursor: help;">Unassigned</span>
                                 {% endif %}
                             </td>
                             <td class="text-center">
-                                {% if group.channel_start %}
+                                {% if group.parent_group_id %}
+                                    <span class="badge badge-inherited" title="Inherited from parent group">↳</span>
+                                {% elif group.channel_start %}
                                     <code>{{ group.channel_start }}</code>
                                 {% else %}
                                     <span class="text-muted">—</span>
@@ -1494,6 +1498,18 @@ code {
     background: rgba(168, 85, 247, 0.15);
     color: #7c3aed;
     border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+.badge-inherited {
+    background: rgba(168, 85, 247, 0.15);
+    color: #a78bfa;
+    font-size: 0.7rem;
+    font-style: italic;
+}
+
+.light-theme .badge-inherited {
+    background: rgba(168, 85, 247, 0.1);
+    color: #7c3aed;
 }
 
 .light-theme .badge-success {
