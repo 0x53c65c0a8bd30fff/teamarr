@@ -450,8 +450,11 @@ class ESPNClient:
             # Convert to UTC for comparison
             cutoff_past = cutoff_past_datetime.astimezone(tz.utc) if cutoff_past_datetime.tzinfo else cutoff_past_datetime.replace(tzinfo=tz.utc)
             # Calculate future cutoff from cutoff_past_datetime to ensure consistent date range
-            # This ensures events and filler end on the same day
-            reference_date = cutoff_past.date()
+            # IMPORTANT: Use the date in the ORIGINAL timezone (not UTC) to match filler's
+            # start_date calculation in _generate_filler_entries. Otherwise, early morning
+            # UTC times (e.g., 3 AM UTC = 10 PM EST previous day) create a 1-day mismatch
+            # where events include day N but filler only processes up to day N-1.
+            reference_date = cutoff_past_datetime.date()
         else:
             cutoff_past = now - timedelta(hours=6)
             reference_date = now.date()
