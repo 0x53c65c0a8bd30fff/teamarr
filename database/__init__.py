@@ -1090,7 +1090,6 @@ def create_event_epg_group(
     assigned_league: str,
     assigned_sport: str,
     enabled: bool = True,
-    refresh_interval_minutes: int = 60,
     event_template_id: int = None,
     account_name: str = None,
     channel_start: int = None,
@@ -1150,7 +1149,7 @@ def create_event_epg_group(
             """
             INSERT INTO event_epg_groups
             (dispatcharr_group_id, dispatcharr_account_id, group_name,
-             assigned_league, assigned_sport, enabled, refresh_interval_minutes,
+             assigned_league, assigned_sport, enabled,
              event_template_id, account_name, channel_start, channel_group_id,
              stream_profile_id, channel_profile_id, custom_regex, custom_regex_enabled,
              custom_regex_teams, custom_regex_teams_enabled,
@@ -1158,12 +1157,12 @@ def create_event_epg_group(
              custom_regex_time, custom_regex_time_enabled,
              stream_exclude_regex, stream_exclude_regex_enabled,
              skip_builtin_filter)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 dispatcharr_group_id, dispatcharr_account_id, group_name,
                 assigned_league.lower(), assigned_sport.lower(),
-                1 if enabled else 0, refresh_interval_minutes,
+                1 if enabled else 0,
                 event_template_id, account_name, channel_start,
                 channel_group_id, stream_profile_id, channel_profile_id, custom_regex,
                 1 if custom_regex_enabled else 0,

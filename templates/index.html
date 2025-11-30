@@ -33,9 +33,23 @@
                     <div class="tile-value">{{ team_count }}</div>
                     <div class="tile-label">Total</div>
                 </div>
-                <div class="tile">
+                <div class="tile tile-hoverable">
                     <div class="tile-value">{{ team_league_count }}</div>
                     <div class="tile-label">Leagues</div>
+                    {% if team_leagues %}
+                    <div class="tile-tooltip">
+                        <div class="tooltip-title">Leagues</div>
+                        {% for league in team_leagues %}
+                        <div class="tooltip-row tooltip-row-with-logo">
+                            {% if league.logo_url %}
+                            <img src="{{ league.logo_url }}" alt="{{ league.league_name }}" class="tooltip-league-logo">
+                            {% endif %}
+                            <span class="tooltip-name">{{ league.league_name }}</span>
+                            <span class="tooltip-value">{{ league.team_count }}</span>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
                 </div>
                 <div class="tile">
                     <div class="tile-value">{{ active_team_count }}</div>
@@ -55,9 +69,23 @@
                 <a href="{{ url_for('event_groups_list') }}" class="manage-link">Manage →</a>
             </div>
             <div class="quadrant-tiles">
-                <div class="tile">
+                <div class="tile tile-hoverable">
                     <div class="tile-value">{{ event_group_count }}</div>
                     <div class="tile-label">Groups</div>
+                    {% if event_leagues %}
+                    <div class="tile-tooltip">
+                        <div class="tooltip-title">Leagues</div>
+                        {% for league in event_leagues %}
+                        <div class="tooltip-row tooltip-row-with-logo">
+                            {% if league.logo_url %}
+                            <img src="{{ league.logo_url }}" alt="{{ league.league_name }}" class="tooltip-league-logo">
+                            {% endif %}
+                            <span class="tooltip-name">{{ league.league_name }}</span>
+                            <span class="tooltip-value">{{ league.group_count }}</span>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
                 </div>
                 <div class="tile">
                     <div class="tile-value">{{ enabled_event_group_count }}</div>
@@ -69,7 +97,7 @@
                 </div>
                 <div class="tile">
                     <div class="tile-value">{{ matched_event_streams }}</div>
-                    <div class="tile-label">Matched</div>
+                    <div class="tile-label">Matched{% if total_event_streams > 0 %} <span class="tile-label-pct">({{ match_percent|int }}%)</span>{% endif %}</div>
                 </div>
             </div>
         </div>
@@ -152,9 +180,20 @@
                     <div class="tile-value">{{ channels_with_logos }}</div>
                     <div class="tile-label">Logos</div>
                 </div>
-                <div class="tile">
+                <div class="tile tile-hoverable">
                     <div class="tile-value">{{ dispatcharr_groups_count }}</div>
                     <div class="tile-label">Groups</div>
+                    {% if channel_groups_list %}
+                    <div class="tile-tooltip tile-tooltip-wide">
+                        <div class="tooltip-title">Provider Groups</div>
+                        {% for group in channel_groups_list %}
+                        <div class="tooltip-row">
+                            <span class="tooltip-name tooltip-name-truncate">{{ group.group_name }}</span>
+                            <span class="tooltip-value">{{ group.channel_count }}</span>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
                 </div>
                 <div class="tile">
                     <div class="tile-value">{{ recently_deleted_count }}</div>
@@ -376,6 +415,34 @@
 .tooltip-value {
     color: var(--primary);
     font-weight: 600;
+}
+
+.tooltip-row-with-logo {
+    gap: 0.5rem;
+}
+
+.tooltip-league-logo {
+    width: 18px;
+    height: 18px;
+    object-fit: contain;
+    flex-shrink: 0;
+}
+
+.tile-tooltip-wide {
+    min-width: 200px;
+    max-width: 280px;
+}
+
+.tooltip-name-truncate {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 180px;
+}
+
+.tile-label-pct {
+    font-weight: 500;
+    color: var(--text-secondary);
 }
 
 .tile-wide {

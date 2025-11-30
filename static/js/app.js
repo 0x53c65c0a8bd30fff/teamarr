@@ -165,6 +165,7 @@ function showAndStoreNotification(message, type = 'info', duration = 10000, titl
 /**
  * Save all currently visible notifications to sessionStorage.
  * Called automatically on beforeunload so notifications persist across navigation.
+ * Skips progress notifications (title "Generating EPG") since those are handled by polling.
  */
 function saveVisibleNotifications() {
     const container = document.getElementById('notification-container');
@@ -178,6 +179,10 @@ function saveVisibleNotifications() {
         const titleEl = notification.querySelector('.notification-title');
         if (!messageEl) return;
 
+        // Skip progress notifications - these are handled by polling, not sessionStorage
+        const title = titleEl?.textContent;
+        if (title === 'Generating EPG') return;
+
         const message = messageEl.textContent;
         let type = 'info';
         if (notification.classList.contains('notification-success')) type = 'success';
@@ -185,7 +190,7 @@ function saveVisibleNotifications() {
         else if (notification.classList.contains('notification-warning')) type = 'warning';
 
         // Store with shorter duration since some time has passed
-        storeNotification(message, type, 8000, titleEl?.textContent);
+        storeNotification(message, type, 8000, title);
     });
 }
 

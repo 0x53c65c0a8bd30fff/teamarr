@@ -83,12 +83,14 @@ def cleanup_old_archives(data_dir: str) -> int:
     """
     Remove old .bak archive files from previous consolidation cycles.
 
+    NOTE: teams.xml.bak is NOT cleaned up because teams.xml is never archived.
+    teams.xml persists across cycles to prevent race conditions.
+
     Returns:
         Number of files deleted
     """
     deleted = 0
     bak_patterns = [
-        os.path.join(data_dir, 'teams.xml.bak'),
         os.path.join(data_dir, 'event_epg_*.xml.bak'),
         os.path.join(data_dir, 'events.xml.bak'),  # Legacy intermediate file
     ]
@@ -227,8 +229,8 @@ def after_team_epg_generation(xml_content: str, final_output_path: str = None) -
     """
     Called after team EPG is generated.
 
-    Saves to teams.xml (hardcoded) then triggers merge to final output.
-    Does NOT archive intermediate files - that happens after the full generation cycle.
+    Archives existing teams.xml to .bak (if present), saves new teams.xml,
+    then triggers merge to final output.
 
     Args:
         xml_content: Generated team XMLTV content
@@ -238,9 +240,21 @@ def after_team_epg_generation(xml_content: str, final_output_path: str = None) -
         Dict with file paths and merge result
     """
     paths = get_epg_paths(final_output_path)
-
-    # Save to teams.xml (hardcoded)
     os.makedirs(paths['data_dir'], exist_ok=True)
+
+    # Archive existing teams.xml to .bak before writing new one
+    # This preserves the previous generation as a backup
+    if os.path.exists(paths['teams']):
+        bak_path = paths['teams'] + '.bak'
+        try:
+            if os.path.exists(bak_path):
+                os.remove(bak_path)
+            os.rename(paths['teams'], bak_path)
+            logger.debug(f"Archived previous teams.xml to {os.path.basename(bak_path)}")
+        except Exception as e:
+            logger.warning(f"Could not archive teams.xml: {e}")
+
+    # Save new teams.xml
     with open(paths['teams'], 'w', encoding='utf-8') as f:
         f.write(xml_content)
     logger.info(f"Saved team EPG to {paths['teams']}")
@@ -285,9 +299,12 @@ def after_event_epg_generation(group_id: int = None, final_output_path: str = No
 
 def finalize_epg_generation(final_output_path: str = None) -> Dict[str, Any]:
     """
-    Finalize EPG generation by archiving intermediate files.
+    Finalize EPG generation by archiving intermediate event files.
 
     Call this ONCE at the end of the full generation cycle (after all teams and events).
+
+    NOTE: teams.xml is NOT archived - it persists across cycles so that subsequent
+    event-only refreshes can still include team-based EPG in the merge.
 
     Args:
         final_output_path: Final merged destination (from settings' epg_output_path)
@@ -298,14 +315,12 @@ def finalize_epg_generation(final_output_path: str = None) -> Dict[str, Any]:
     paths = get_epg_paths(final_output_path)
     data_dir = paths['data_dir']
 
-    # Clean up old archives first
+    # Clean up old archives first (only event_epg_*.xml.bak, NOT teams.xml.bak)
     old_deleted = cleanup_old_archives(data_dir)
 
-    # Collect files to archive
+    # Only archive event EPG files - teams.xml persists across cycles
+    # This prevents race conditions where a subsequent refresh loses team EPG
     files_to_archive = []
-    if os.path.exists(paths['teams']):
-        files_to_archive.append(paths['teams'])
-
     event_pattern = os.path.join(data_dir, 'event_epg_*.xml')
     event_files = glob.glob(event_pattern)
     files_to_archive.extend(event_files)
@@ -313,7 +328,7 @@ def finalize_epg_generation(final_output_path: str = None) -> Dict[str, Any]:
     # Archive them
     archived = archive_intermediate_files(files_to_archive)
 
-    logger.info(f"Finalized EPG: archived {archived} files, cleaned {old_deleted} old archives")
+    logger.info(f"Finalized EPG: archived {archived} event files, cleaned {old_deleted} old archives")
 
     return {
         'files_archived': archived,

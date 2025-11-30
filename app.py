@@ -1066,6 +1066,45 @@ def index():
         WHERE mc.deleted_at IS NULL AND eg.channel_group_id IS NOT NULL
     """).fetchone()[0]
 
+    # Get leagues with logos for Teams quadrant hover dropdown
+    team_leagues = cursor.execute("""
+        SELECT DISTINCT t.league as league_code,
+               COALESCE(lc.league_name, UPPER(t.league)) as league_name,
+               lc.logo_url,
+               COUNT(t.id) as team_count
+        FROM teams t
+        LEFT JOIN league_config lc ON LOWER(t.league) = LOWER(lc.league_code)
+        WHERE t.league IS NOT NULL AND t.league != ''
+        GROUP BY t.league
+        ORDER BY team_count DESC, league_name
+    """).fetchall()
+
+    # Get leagues with logos for Event Groups quadrant hover dropdown
+    event_leagues = cursor.execute("""
+        SELECT DISTINCT eg.assigned_league as league_code,
+               COALESCE(lc.league_name, UPPER(eg.assigned_league)) as league_name,
+               lc.logo_url,
+               COUNT(eg.id) as group_count
+        FROM event_epg_groups eg
+        LEFT JOIN league_config lc ON LOWER(eg.assigned_league) = LOWER(lc.league_code)
+        WHERE eg.enabled = 1
+        GROUP BY eg.assigned_league
+        ORDER BY group_count DESC, league_name
+    """).fetchall()
+
+    # Get M3U provider group names for Channels quadrant hover dropdown
+    channel_groups_list = cursor.execute("""
+        SELECT DISTINCT eg.group_name, COUNT(mc.id) as channel_count
+        FROM managed_channels mc
+        JOIN event_epg_groups eg ON mc.event_epg_group_id = eg.id
+        WHERE mc.deleted_at IS NULL
+        GROUP BY eg.group_name
+        ORDER BY channel_count DESC, eg.group_name
+    """).fetchall()
+
+    # Calculate match percentage (handle 0/0 case)
+    match_percent = round((matched_event_streams / total_event_streams * 100), 0) if total_event_streams > 0 else 0
+
     # Get timezone from settings
     settings_row = cursor.execute("SELECT default_timezone FROM settings WHERE id = 1").fetchone()
     user_timezone = settings_row[0] if settings_row else 'America/Detroit'
@@ -1145,7 +1184,12 @@ def index():
         recently_deleted_count=recently_deleted_count,
         latest_epg=latest_epg,
         epg_history=epg_history_formatted,
-        epg_stats=epg_stats  # Single source of truth for EPG stats
+        epg_stats=epg_stats,  # Single source of truth for EPG stats
+        # Hover dropdown data
+        team_leagues=team_leagues,
+        event_leagues=event_leagues,
+        channel_groups_list=channel_groups_list,
+        match_percent=match_percent
     )
 
 # =============================================================================
@@ -3349,7 +3393,6 @@ def api_event_epg_groups_create():
         group_name: str (required) - exact name from Dispatcharr
         assigned_league: str (required) - league code (e.g., 'nfl', 'epl')
         assigned_sport: str (required) - sport type (e.g., 'football', 'soccer')
-        refresh_interval_minutes: int (optional, default: 60)
         event_template_id: int (optional, must be an event template)
     """
     try:
@@ -3384,7 +3427,6 @@ def api_event_epg_groups_create():
             group_name=data['group_name'],
             assigned_league=data['assigned_league'],
             assigned_sport=data['assigned_sport'],
-            refresh_interval_minutes=data.get('refresh_interval_minutes', 60),
             event_template_id=event_template_id,
             account_name=data.get('account_name'),
             channel_start=data.get('channel_start'),
@@ -3439,7 +3481,6 @@ def api_event_epg_groups_update(group_id):
         assigned_league: str
         assigned_sport: str
         enabled: bool
-        refresh_interval_minutes: int
         event_template_id: int (must be an event template, not team template)
         channel_start: int (if changed, deletes existing channels to recreate at new range)
         channel_group_id: int (if changed, updates existing channels to new group)
