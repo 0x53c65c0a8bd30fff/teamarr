@@ -1745,8 +1745,7 @@ class ChannelManager:
         """
         Add a channel to a channel profile.
 
-        Channel profiles maintain a list of channel IDs. This method fetches the
-        current list, appends the new channel if not already present, and updates.
+        Uses the per-channel endpoint to enable the channel in the profile.
 
         Args:
             profile_id: Dispatcharr channel profile ID
@@ -1755,22 +1754,11 @@ class ChannelManager:
         Returns:
             Result dict with success or error
         """
-        # Get current profile
-        profile = self.get_channel_profile(profile_id)
-        if not profile:
-            return {"success": False, "error": f"Channel profile {profile_id} not found"}
-
-        current_channels = profile.get('channels', [])
-
-        # Check if already in profile
-        if channel_id in current_channels:
-            return {"success": True, "message": "Channel already in profile"}
-
-        # Add channel and update
-        updated_channels = current_channels + [channel_id]
-        response = self.auth.request("PATCH", f"/api/channels/profiles/{profile_id}/", {
-            'channels': updated_channels
-        })
+        response = self.auth.request(
+            "PATCH",
+            f"/api/channels/profiles/{profile_id}/channels/{channel_id}/",
+            {'enabled': True}
+        )
 
         if response and response.status_code == 200:
             return {"success": True}
@@ -1781,6 +1769,8 @@ class ChannelManager:
         """
         Remove a channel from a channel profile.
 
+        Uses the per-channel endpoint to disable the channel in the profile.
+
         Args:
             profile_id: Dispatcharr channel profile ID
             channel_id: Dispatcharr channel ID to remove
@@ -1788,22 +1778,11 @@ class ChannelManager:
         Returns:
             Result dict with success or error
         """
-        # Get current profile
-        profile = self.get_channel_profile(profile_id)
-        if not profile:
-            return {"success": False, "error": f"Channel profile {profile_id} not found"}
-
-        current_channels = profile.get('channels', [])
-
-        # Check if channel is in profile
-        if channel_id not in current_channels:
-            return {"success": True, "message": "Channel not in profile"}
-
-        # Remove channel and update
-        updated_channels = [ch for ch in current_channels if ch != channel_id]
-        response = self.auth.request("PATCH", f"/api/channels/profiles/{profile_id}/", {
-            'channels': updated_channels
-        })
+        response = self.auth.request(
+            "PATCH",
+            f"/api/channels/profiles/{profile_id}/channels/{channel_id}/",
+            {'enabled': False}
+        )
 
         if response and response.status_code == 200:
             return {"success": True}
