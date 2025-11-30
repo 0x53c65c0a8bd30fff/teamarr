@@ -23,6 +23,10 @@ class ESPNClient:
         self._stats_cache = {}
         self._cache_duration = timedelta(hours=6)
 
+        # Cache for team schedules (cleared each EPG generation run)
+        # Key: (sport, league, team_slug), Value: schedule data
+        self._schedule_cache = {}
+
     def _make_request(self, url: str) -> Optional[Dict]:
         """Make HTTP request with retry logic"""
         for attempt in range(self.retry_count):
@@ -105,7 +109,10 @@ class ESPNClient:
 
     def get_team_schedule(self, sport: str, league: str, team_slug: str, days_ahead: int = 14) -> Optional[Dict]:
         """
-        Fetch team schedule from ESPN API
+        Fetch team schedule from ESPN API with caching.
+
+        Schedule data is cached per-generation to avoid redundant API calls
+        when the same team is referenced multiple times (e.g., opponent lookups).
 
         Args:
             sport: Sport type (e.g., 'basketball', 'football', 'soccer')
@@ -116,8 +123,24 @@ class ESPNClient:
         Returns:
             Dict with team schedule data or None if failed
         """
+        # Check cache first
+        cache_key = (sport, league, str(team_slug))
+        if cache_key in self._schedule_cache:
+            logger.debug(f"Schedule cache hit for {sport}/{league}/{team_slug}")
+            return self._schedule_cache[cache_key]
+
+        # Fetch from API
         url = f"{self.base_url}/{sport}/{league}/teams/{team_slug}/schedule"
-        return self._make_request(url)
+        result = self._make_request(url)
+
+        # Cache the result (even if None to avoid re-fetching failures)
+        self._schedule_cache[cache_key] = result
+        return result
+
+    def clear_schedule_cache(self):
+        """Clear the schedule cache. Call this at the start of each EPG generation."""
+        self._schedule_cache.clear()
+        logger.debug("Schedule cache cleared")
 
     def get_team_info(self, sport: str, league: str, team_id: str) -> Optional[Dict]:
         """
@@ -410,16 +433,20 @@ class ESPNClient:
         from datetime import timezone as tz
         now = datetime.now(tz.utc)
 
-        # Calculate future cutoff as end of the Nth day
-        cutoff_date = now.date() + timedelta(days=days_ahead - 1)
-        cutoff_future = datetime.combine(cutoff_date, datetime.max.time()).replace(tzinfo=tz.utc)
-
         # Use provided cutoff_past_datetime or default to 6 hours ago
         if cutoff_past_datetime:
             # Convert to UTC for comparison
             cutoff_past = cutoff_past_datetime.astimezone(tz.utc) if cutoff_past_datetime.tzinfo else cutoff_past_datetime.replace(tzinfo=tz.utc)
+            # Calculate future cutoff from cutoff_past_datetime to ensure consistent date range
+            # This ensures events and filler end on the same day
+            reference_date = cutoff_past.date()
         else:
             cutoff_past = now - timedelta(hours=6)
+            reference_date = now.date()
+
+        # Calculate future cutoff as end of the Nth day from reference date
+        cutoff_date = reference_date + timedelta(days=days_ahead - 1)
+        cutoff_future = datetime.combine(cutoff_date, datetime.max.time()).replace(tzinfo=tz.utc)
 
         for event in schedule_data.get('events', []):
             try:

@@ -11,6 +11,7 @@ This module orchestrates the EPG generation process:
 from datetime import datetime, date, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from zoneinfo import ZoneInfo
+from concurrent.futures import ThreadPoolExecutor
 import json
 
 from utils.logger import get_logger
@@ -158,21 +159,18 @@ class EPGOrchestrator:
                 epg_start_datetime = self._round_to_last_hour(now)
                 logger.info(f"EPG will start from {epg_start_datetime.strftime('%Y-%m-%d %H:%M %Z')} (last top of hour)")
 
-        # Fetch schedules for each team
+        # Fetch schedules for each team (in parallel)
         all_events = {}
         total_teams = len(teams_list)
 
-        for idx, team in enumerate(teams_list, 1):
+        def process_single_team(team):
+            """Process a single team - called in parallel. Exact same logic as sequential."""
             team_id = str(team['id'])
             team_name = team.get('team_name', 'Unknown')
             logger.info(f"Processing team: {team_name} (ID: {team_id})")
 
-            # Report progress
-            if progress_callback:
-                progress_callback(idx, total_teams, team_name, f"Processing {team_name}...")
-
             try:
-                # Process this team's schedule
+                # Process this team's schedule (exact same call as before)
                 team_events = self._process_team_schedule(
                     team,
                     days_ahead,
@@ -180,14 +178,26 @@ class EPGOrchestrator:
                     epg_start_datetime,
                     settings
                 )
-
-                all_events[team_id] = team_events
                 logger.info(f"  Generated {len(team_events)} total programs for {team_name}")
+                return (team_id, team_events, None)
 
             except Exception as e:
                 logger.error(f"Error processing team {team_name}: {e}", exc_info=True)
-                # Continue with other teams
-                all_events[team_id] = []
+                return (team_id, [], str(e))
+
+        # Process all teams in parallel (max 10 workers)
+        if progress_callback:
+            progress_callback(1, total_teams, "All teams", f"Processing {total_teams} teams in parallel...")
+
+        with ThreadPoolExecutor(max_workers=min(len(teams_list), 10)) as executor:
+            results = list(executor.map(process_single_team, teams_list))
+
+        # Aggregate results (same structure as sequential)
+        for team_id, team_events, error in results:
+            all_events[team_id] = team_events
+
+        if progress_callback:
+            progress_callback(total_teams, total_teams, "Complete", f"Processed {total_teams} teams")
 
         # Calculate stats
         generation_time = (datetime.now() - start_time).total_seconds()
@@ -1206,8 +1216,10 @@ class EPGOrchestrator:
             first_day_start = epg_start_datetime.astimezone(team_tz)
             start_date = first_day_start.date()
 
-        # Calculate end_date based on today + (days_ahead - 1)
-        end_date = now.date() + timedelta(days=days_ahead - 1)
+        # Calculate end_date based on start_date + (days_ahead - 1)
+        # This ensures filler extends consistently to midnight of the final day
+        # regardless of when epg_start_datetime falls
+        end_date = start_date + timedelta(days=days_ahead - 1)
 
         # Create a set of game dates for quick lookup (only EPG window games)
         game_dates = set()

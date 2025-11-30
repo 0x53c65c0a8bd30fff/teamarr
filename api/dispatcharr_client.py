@@ -638,6 +638,157 @@ class M3UManager:
             "duration": timeout
         }
 
+    def refresh_multiple_accounts(
+        self,
+        account_ids: List[int],
+        timeout: int = 120,
+        poll_interval: int = 2
+    ) -> Dict[str, Any]:
+        """
+        Refresh multiple M3U accounts in parallel and wait for all to complete.
+
+        Triggers all accounts simultaneously, then polls until all complete or timeout.
+        This is more efficient than sequential refreshes when multiple event groups
+        share the same M3U provider.
+
+        Args:
+            account_ids: List of unique M3U account IDs to refresh
+            timeout: Maximum seconds to wait for all (default: 120)
+            poll_interval: Seconds between status checks (default: 2)
+
+        Returns:
+            Result dict with:
+            - success: bool (True if ALL succeeded)
+            - results: dict mapping account_id -> result dict
+            - duration: float (total seconds taken)
+            - failed_count: int
+            - succeeded_count: int
+        """
+        import time
+        from concurrent.futures import ThreadPoolExecutor
+
+        if not account_ids:
+            return {
+                "success": True,
+                "results": {},
+                "duration": 0,
+                "failed_count": 0,
+                "succeeded_count": 0
+            }
+
+        # Deduplicate account IDs
+        unique_ids = list(set(account_ids))
+
+        # Get initial state for all accounts
+        initial_states = {}
+        for account_id in unique_ids:
+            account = self.get_account(account_id)
+            if account:
+                initial_states[account_id] = account.get('updated_at')
+            else:
+                initial_states[account_id] = None
+
+        # Trigger all refreshes in parallel
+        def trigger_refresh(account_id):
+            return (account_id, self.refresh_m3u_account(account_id))
+
+        trigger_results = {}
+        with ThreadPoolExecutor(max_workers=len(unique_ids)) as executor:
+            futures = {executor.submit(trigger_refresh, aid): aid for aid in unique_ids}
+            for future in futures:
+                try:
+                    account_id, result = future.result()
+                    trigger_results[account_id] = result
+                except Exception as e:
+                    account_id = futures[future]
+                    trigger_results[account_id] = {"success": False, "message": str(e)}
+
+        # Track which accounts we're waiting for
+        pending = set()
+        results = {}
+
+        for account_id in unique_ids:
+            trigger_result = trigger_results.get(account_id, {"success": False, "message": "Trigger failed"})
+
+            if trigger_result.get('success'):
+                pending.add(account_id)
+            else:
+                results[account_id] = {
+                    "success": False,
+                    "message": trigger_result.get('message', 'Failed to trigger refresh')
+                }
+
+        # Poll until all complete or timeout
+        start_time = time.time()
+        while pending and (time.time() - start_time) < timeout:
+            time.sleep(poll_interval)
+
+            # Check all pending accounts
+            still_pending = set()
+            for account_id in pending:
+                current = self.get_account(account_id)
+                if not current:
+                    still_pending.add(account_id)
+                    continue
+
+                current_status = current.get('status', '')
+                current_updated = current.get('updated_at')
+                initial_updated = initial_states.get(account_id)
+
+                # Check if refresh completed
+                if current_updated != initial_updated:
+                    duration = time.time() - start_time
+                    if current_status == 'success':
+                        results[account_id] = {
+                            "success": True,
+                            "message": current.get('last_message', 'Refresh completed'),
+                            "duration": duration
+                        }
+                    elif current_status == 'error':
+                        results[account_id] = {
+                            "success": False,
+                            "message": current.get('last_message', 'Refresh failed'),
+                            "duration": duration
+                        }
+                    else:
+                        # Status unclear but updated_at changed - assume success
+                        results[account_id] = {
+                            "success": True,
+                            "message": "Refresh completed",
+                            "duration": duration
+                        }
+                elif current_status == 'error':
+                    results[account_id] = {
+                        "success": False,
+                        "message": current.get('last_message', 'Refresh failed'),
+                        "duration": time.time() - start_time
+                    }
+                else:
+                    still_pending.add(account_id)
+
+            pending = still_pending
+
+        # Handle any remaining pending (timed out)
+        for account_id in pending:
+            results[account_id] = {
+                "success": False,
+                "message": f"Refresh timed out after {timeout} seconds",
+                "duration": timeout
+            }
+
+        # Calculate summary
+        total_duration = time.time() - start_time
+        succeeded = sum(1 for r in results.values() if r.get('success'))
+        failed = len(results) - succeeded
+
+        return {
+            "success": failed == 0,
+            "results": results,
+            "duration": total_duration,
+            "failed_count": failed,
+            "succeeded_count": succeeded
+        }
+
     def test_connection(self) -> Dict[str, Any]:
         """Test connection to Dispatcharr."""
         try:
