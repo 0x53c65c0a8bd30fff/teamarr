@@ -258,7 +258,7 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
         if not skip_m3u_refresh:
             app.logger.debug(f"Refreshing M3U account {group['dispatcharr_account_id']} for event EPG group {group_id}")
 
-            refresh_result = m3u_manager.wait_for_refresh(group['dispatcharr_account_id'], timeout=120)
+            refresh_result = m3u_manager.wait_for_refresh(group['dispatcharr_account_id'], timeout=180)
             if not refresh_result.get('success'):
                 return {
                     'success': False,
@@ -1151,7 +1151,7 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
                 manager = EPGManager(dispatcharr_url, dispatcharr_username, dispatcharr_password)
 
                 # Use wait_for_refresh to ensure EPG import completes before associating
-                refresh_result = manager.wait_for_refresh(dispatcharr_epg_id, timeout=60)
+                refresh_result = manager.wait_for_refresh(dispatcharr_epg_id, timeout=120)
 
                 if refresh_result.get('success'):
                     duration = refresh_result.get('duration', 0)
@@ -3565,7 +3565,7 @@ def api_event_epg_dispatcharr_streams(group_id):
         db_group = get_event_epg_group_by_dispatcharr_id(group_id)
         if db_group and db_group.get('dispatcharr_account_id'):
             app.logger.debug(f"Refreshing M3U account {db_group['dispatcharr_account_id']} before fetching streams")
-            refresh_result = manager.wait_for_refresh(db_group['dispatcharr_account_id'], timeout=120)
+            refresh_result = manager.wait_for_refresh(db_group['dispatcharr_account_id'], timeout=180)
             if not refresh_result.get('success'):
                 app.logger.warning(f"M3U refresh failed: {refresh_result.get('message')} - continuing with potentially stale data")
 
@@ -3751,7 +3751,7 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
 
                     if db_group.get('dispatcharr_account_id'):
                         send_progress('progress', 'Refreshing M3U provider...', percent=10)
-                        refresh_result = manager.wait_for_refresh(db_group['dispatcharr_account_id'], timeout=120)
+                        refresh_result = manager.wait_for_refresh(db_group['dispatcharr_account_id'], timeout=180)
                         if not refresh_result.get('success'):
                             app.logger.warning(f"M3U refresh failed: {refresh_result.get('message')} - continuing with potentially stale data")
 
@@ -4760,7 +4760,7 @@ def api_event_epg_refresh_stream(group_id):
 
             # Step 1: Refresh M3U
             yield f"data: {json.dumps({'type': 'progress', 'step': 1, 'total': 5, 'message': 'Refreshing M3U data...'})}\n\n"
-            refresh_result = manager.wait_for_refresh(group['dispatcharr_account_id'], timeout=120)
+            refresh_result = manager.wait_for_refresh(group['dispatcharr_account_id'], timeout=180)
             if not refresh_result.get('success'):
                 error_msg = f"M3U refresh failed: {refresh_result.get('message')}"
                 yield f"data: {json.dumps({'type': 'error', 'message': error_msg})}\n\n"
