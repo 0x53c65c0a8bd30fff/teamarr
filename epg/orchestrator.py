@@ -1332,10 +1332,14 @@ class EPGOrchestrator:
                             first_next_game_start = next_day_games[0]['start']
 
                             if last_game_end < first_next_game_start:
+                                # Enrich last game with scoreboard data to get final scores
+                                last_game_enriched = self._enrich_last_game_with_score(
+                                    games_today[-1]['event'], api_sport, api_league, epg_timezone
+                                )
                                 pregame_entries = self._create_filler_chunks(
                                     last_game_end, first_next_game_start, max_hours,
                                     team, 'pregame', next_day_games[0]['event'], team_stats,
-                                    games_today[-1]['event'], epg_timezone, api_path, schedule_data, settings
+                                    last_game_enriched, epg_timezone, api_path, schedule_data, settings
                                 )
                                 filler_entries.extend(pregame_entries)
                         else:
@@ -1343,10 +1347,20 @@ class EPGOrchestrator:
                             next_day_end = day_end + timedelta(days=1)
 
                             if midnight_mode == 'postgame':
+                                # Find the next game for .next context (after current_date)
+                                next_game_for_postgame = self._find_next_game(
+                                    current_date,
+                                    extended_game_schedule or game_schedule,
+                                    extended_game_dates or game_dates
+                                )
+                                # Enrich last game with scoreboard data to get final scores
+                                last_game_enriched = self._enrich_last_game_with_score(
+                                    games_today[-1]['event'], api_sport, api_league, epg_timezone
+                                )
                                 postgame_entries = self._create_filler_chunks(
                                     last_game_end, next_day_end, max_hours,
-                                    team, 'postgame', games_today[-1]['event'], team_stats,
-                                    games_today[-1]['event'], epg_timezone, api_path, schedule_data, settings
+                                    team, 'postgame', next_game_for_postgame, team_stats,
+                                    last_game_enriched, epg_timezone, api_path, schedule_data, settings
                                 )
                                 filler_entries.extend(postgame_entries)
                             elif midnight_mode == 'idle':
@@ -1356,19 +1370,33 @@ class EPGOrchestrator:
                                         extended_game_schedule or game_schedule,
                                         extended_game_dates or game_dates
                                     )
+                                    # Enrich last game with scoreboard data to get final scores
+                                    last_game_enriched = self._enrich_last_game_with_score(
+                                        games_today[-1]['event'], api_sport, api_league, epg_timezone
+                                    )
                                     idle_entries = self._create_filler_chunks(
                                         last_game_end, next_day_end, max_hours,
                                         team, 'idle', next_game, team_stats,
-                                        games_today[-1]['event'], epg_timezone, api_path, schedule_data, settings
+                                        last_game_enriched, epg_timezone, api_path, schedule_data, settings
                                     )
                                     filler_entries.extend(idle_entries)
                     else:
                         # Game ends before midnight - fill to midnight with postgame
                         if last_game_end < day_end:
+                            # Find the next game for .next context (after current_date)
+                            next_game_for_postgame = self._find_next_game(
+                                current_date,
+                                extended_game_schedule or game_schedule,
+                                extended_game_dates or game_dates
+                            )
+                            # Enrich last game with scoreboard data to get final scores
+                            last_game_enriched = self._enrich_last_game_with_score(
+                                games_today[-1]['event'], api_sport, api_league, epg_timezone
+                            )
                             postgame_entries = self._create_filler_chunks(
                                 last_game_end, day_end, max_hours,
-                                team, 'postgame', games_today[-1]['event'], team_stats,
-                                games_today[-1]['event'], epg_timezone, api_path, schedule_data, settings
+                                team, 'postgame', next_game_for_postgame, team_stats,
+                                last_game_enriched, epg_timezone, api_path, schedule_data, settings
                             )
                             filler_entries.extend(postgame_entries)
 
@@ -1541,9 +1569,11 @@ class EPGOrchestrator:
             context['game'] = None
 
         # Build NEXT game context using helper
-        # For pregame/idle, the game_event IS the next game
-        # For postgame, we need to find the actual next game
-        next_event = game_event if filler_type in ['idle', 'pregame'] else None
+        # For all filler types, game_event now contains the next game:
+        # - pregame: the upcoming game we're waiting for
+        # - postgame: the next game after the one that just ended (found by caller)
+        # - idle: the next upcoming game
+        next_event = game_event
 
         next_context = self._build_full_game_context(
             event=next_event,
