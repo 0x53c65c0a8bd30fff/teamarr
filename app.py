@@ -5779,6 +5779,9 @@ def api_find_orphan_channels():
         all_channels = channel_api.get_channels()
 
         # Find orphans
+        # If no active managed channels exist, ALL teamarr-event channels are orphans
+        no_active_channels = len(known_channel_ids) == 0 and len(known_uuids) == 0
+
         orphans = []
         for ch in all_channels:
             tvg_id = ch.get('tvg_id') or ''
@@ -5788,11 +5791,15 @@ def api_find_orphan_channels():
             ch_id = ch.get('id')
             ch_uuid = ch.get('uuid')
 
-            # Check if we know this channel
-            is_known_by_uuid = ch_uuid and ch_uuid in known_uuids
-            is_known_by_id = ch_id in known_channel_ids
+            # If no active channels, all teamarr-event channels are orphans
+            # Otherwise, check if we know this channel
+            is_orphan = no_active_channels
+            if not is_orphan:
+                is_known_by_uuid = ch_uuid and ch_uuid in known_uuids
+                is_known_by_id = ch_id in known_channel_ids
+                is_orphan = not is_known_by_uuid and not is_known_by_id
 
-            if not is_known_by_uuid and not is_known_by_id:
+            if is_orphan:
                 # Extract event ID from tvg_id
                 event_id = tvg_id.replace('teamarr-event-', '')
                 orphans.append({
@@ -5918,6 +5925,155 @@ def api_cleanup_orphan_channels():
 
     except Exception as e:
         app.logger.error(f"Error cleaning up orphan channels: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/channel-lifecycle/reset', methods=['GET'])
+def api_channel_lifecycle_reset_preview():
+    """
+    Preview all Teamarr-created channels that would be deleted by reset.
+
+    Returns list of all channels with teamarr-event-* tvg_id, regardless
+    of whether they're tracked in managed_channels.
+    """
+    try:
+        from database import get_connection
+        from api.dispatcharr_client import ChannelManager
+
+        conn = get_connection()
+        settings = dict(conn.execute("SELECT * FROM settings WHERE id = 1").fetchone())
+        conn.close()
+
+        if not settings.get('dispatcharr_enabled'):
+            return jsonify({'error': 'Dispatcharr not configured'}), 400
+
+        channel_api = ChannelManager(
+            settings['dispatcharr_url'],
+            settings['dispatcharr_username'],
+            settings['dispatcharr_password']
+        )
+        all_channels = channel_api.get_channels()
+
+        # Find ALL teamarr-event channels
+        teamarr_channels = []
+        for ch in all_channels:
+            tvg_id = ch.get('tvg_id') or ''
+            if tvg_id.startswith('teamarr-event-'):
+                event_id = tvg_id.replace('teamarr-event-', '')
+                teamarr_channels.append({
+                    'dispatcharr_channel_id': ch.get('id'),
+                    'uuid': ch.get('uuid'),
+                    'tvg_id': tvg_id,
+                    'channel_name': ch.get('name'),
+                    'channel_number': ch.get('channel_number'),
+                    'espn_event_id': event_id,
+                    'stream_count': len(ch.get('streams', []))
+                })
+
+        return jsonify({
+            'success': True,
+            'channel_count': len(teamarr_channels),
+            'channels': teamarr_channels
+        })
+
+    except Exception as e:
+        app.logger.error(f"Error previewing reset channels: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/channel-lifecycle/reset', methods=['POST'])
+def api_channel_lifecycle_reset():
+    """
+    Delete ALL Teamarr-created channels from Dispatcharr.
+
+    This is a destructive operation that removes all channels with
+    teamarr-event-* tvg_id, regardless of tracking state. Use this
+    to clean up after issues or start fresh.
+
+    Also clears the managed_channels table (marks all as deleted).
+    """
+    try:
+        from database import get_connection
+        from api.dispatcharr_client import ChannelManager
+
+        conn = get_connection()
+        settings = dict(conn.execute("SELECT * FROM settings WHERE id = 1").fetchone())
+
+        if not settings.get('dispatcharr_enabled'):
+            conn.close()
+            return jsonify({'error': 'Dispatcharr not configured'}), 400
+
+        channel_api = ChannelManager(
+            settings['dispatcharr_url'],
+            settings['dispatcharr_username'],
+            settings['dispatcharr_password']
+        )
+        all_channels = channel_api.get_channels()
+
+        # Find and delete ALL teamarr-event channels
+        deleted = []
+        errors = []
+
+        for ch in all_channels:
+            tvg_id = ch.get('tvg_id') or ''
+            if not tvg_id.startswith('teamarr-event-'):
+                continue
+
+            ch_id = ch.get('id')
+
+            try:
+                result = channel_api.delete_channel(ch_id)
+                if result.get('success'):
+                    deleted.append({
+                        'channel_id': ch_id,
+                        'channel_name': ch.get('name'),
+                        'channel_number': ch.get('channel_number'),
+                        'tvg_id': tvg_id
+                    })
+                    app.logger.info(f"Reset: deleted channel {ch.get('name')} ({tvg_id})")
+                else:
+                    errors.append({
+                        'channel_id': ch_id,
+                        'channel_name': ch.get('name'),
+                        'error': result.get('error', 'Unknown error')
+                    })
+            except Exception as e:
+                errors.append({
+                    'channel_id': ch_id,
+                    'channel_name': ch.get('name'),
+                    'error': str(e)
+                })
+
+        # Mark all managed_channels as deleted
+        deleted_db_count = 0
+        try:
+            cursor = conn.execute("""
+                UPDATE managed_channels
+                SET deleted_at = CURRENT_TIMESTAMP,
+                    sync_status = 'reset',
+                    delete_reason = 'Manual reset - all channels deleted'
+                WHERE deleted_at IS NULL
+            """)
+            deleted_db_count = cursor.rowcount
+            conn.commit()
+        except Exception as e:
+            app.logger.warning(f"Failed to update managed_channels during reset: {e}")
+
+        conn.close()
+
+        app.logger.info(f"Channel reset complete: {len(deleted)} deleted from Dispatcharr, {deleted_db_count} marked in DB")
+
+        return jsonify({
+            'success': True,
+            'deleted_count': len(deleted),
+            'deleted': deleted,
+            'db_records_updated': deleted_db_count,
+            'error_count': len(errors),
+            'errors': errors
+        })
+
+    except Exception as e:
+        app.logger.error(f"Error resetting channels: {e}")
         return jsonify({'error': str(e)}), 500
 
 
