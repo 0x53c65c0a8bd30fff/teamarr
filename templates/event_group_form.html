@@ -175,14 +175,14 @@
             </div>
 
             <div class="form-group">
-                <label for="channel_profile_id">Channel Profile</label>
+                <label for="channel_profile_ids">Channel Profiles</label>
                 <div style="margin-bottom: 0.5rem;">
                     <input type="text" id="channel-profile-filter" class="form-control" placeholder="Filter profiles..." oninput="filterChannelProfiles()">
                 </div>
-                <select id="channel_profile_id" name="channel_profile_id" class="form-control" size="4" style="height: auto;">
+                <select id="channel_profile_ids" name="channel_profile_ids" class="form-control" size="4" style="height: auto;" multiple>
                     <option value="">Loading profiles...</option>
                 </select>
-                <small class="form-help">Add created channels to this profile. Leave blank to skip.</small>
+                <small class="form-help">Add created channels to these profiles (Ctrl/Cmd+click to select multiple). Leave blank to skip.</small>
                 </div>
             </div>
         </div><!-- end independent-settings -->
@@ -327,8 +327,14 @@ document.addEventListener('DOMContentLoaded', async function() {
     {% if mode == 'edit' and group.stream_profile_id %}
     document.getElementById('stream_profile_id').value = '{{ group.stream_profile_id }}';
     {% endif %}
-    {% if mode == 'edit' and group.channel_profile_id %}
-    document.getElementById('channel_profile_id').value = '{{ group.channel_profile_id }}';
+    {% if mode == 'edit' and group.channel_profile_ids %}
+    // Set selected channel profiles (multiselect)
+    const profileIds = {{ group.channel_profile_ids | safe }};
+    const profileSelect = document.getElementById('channel_profile_ids');
+    profileIds.forEach(id => {
+        const option = profileSelect.querySelector(`option[value="${id}"]`);
+        if (option) option.selected = true;
+    });
     {% endif %}
     {% if mode == 'edit' and group.parent_group_id %}
     document.getElementById('parent_group_id').value = '{{ group.parent_group_id }}';
@@ -582,17 +588,18 @@ async function loadChannelProfiles() {
             renderChannelProfiles();
         } else {
             console.error('Failed to load channel profiles:', data.error);
-            document.getElementById('channel_profile_id').innerHTML = '<option value="">(Failed to load profiles)</option>';
+            document.getElementById('channel_profile_ids').innerHTML = '<option value="">(Failed to load profiles)</option>';
         }
     } catch (error) {
         console.error('Error loading channel profiles:', error);
-        document.getElementById('channel_profile_id').innerHTML = '<option value="">(Error loading profiles)</option>';
+        document.getElementById('channel_profile_ids').innerHTML = '<option value="">(Error loading profiles)</option>';
     }
 }
 
 function renderChannelProfiles() {
-    const select = document.getElementById('channel_profile_id');
-    const currentValue = select.value;
+    const select = document.getElementById('channel_profile_ids');
+    // Get currently selected values (multiselect)
+    const selectedValues = Array.from(select.selectedOptions).map(o => o.value);
 
     select.innerHTML = '';
 
@@ -600,18 +607,19 @@ function renderChannelProfiles() {
         const option = document.createElement('option');
         option.value = profile.id;
         option.textContent = profile.name;
+        // Restore selection state
+        if (selectedValues.includes(String(profile.id))) {
+            option.selected = true;
+        }
         select.appendChild(option);
     });
-
-    if (currentValue) {
-        select.value = currentValue;
-    }
 }
 
 function filterChannelProfiles() {
     const filter = document.getElementById('channel-profile-filter').value.toLowerCase();
-    const select = document.getElementById('channel_profile_id');
-    const currentValue = select.value;
+    const select = document.getElementById('channel_profile_ids');
+    // Get currently selected values (multiselect)
+    const selectedValues = Array.from(select.selectedOptions).map(o => o.value);
 
     select.innerHTML = '';
 
@@ -620,13 +628,13 @@ function filterChannelProfiles() {
             const option = document.createElement('option');
             option.value = profile.id;
             option.textContent = profile.name;
+            // Restore selection state
+            if (selectedValues.includes(String(profile.id))) {
+                option.selected = true;
+            }
             select.appendChild(option);
         }
     });
-
-    if (currentValue && select.querySelector(`option[value="${currentValue}"]`)) {
-        select.value = currentValue;
-    }
 }
 
 // ============================================================================
@@ -895,9 +903,12 @@ document.getElementById('event-group-form').addEventListener('submit', async fun
     ];
 
     formData.forEach((value, key) => {
+        // Skip channel_profile_ids - handled separately as multiselect
+        if (key === 'channel_profile_ids') return;
+
         if (value !== '' && value !== null) {
             // Convert numeric fields
-            if (['channel_start', 'channel_group_id', 'stream_profile_id', 'channel_profile_id', 'event_template_id', 'dispatcharr_group_id', 'dispatcharr_account_id', 'parent_group_id'].includes(key)) {
+            if (['channel_start', 'channel_group_id', 'stream_profile_id', 'event_template_id', 'dispatcharr_group_id', 'dispatcharr_account_id', 'parent_group_id'].includes(key)) {
                 data[key] = value ? parseInt(value) : null;
             } else if (checkboxFields.includes(key)) {
                 data[key] = true;
@@ -913,6 +924,13 @@ document.getElementById('event-group-form').addEventListener('submit', async fun
             data[field] = false;
         }
     });
+
+    // Handle channel_profile_ids multiselect
+    const profileSelect = document.getElementById('channel_profile_ids');
+    const selectedProfileIds = Array.from(profileSelect.selectedOptions)
+        .map(o => parseInt(o.value))
+        .filter(id => !isNaN(id));
+    data.channel_profile_ids = selectedProfileIds.length > 0 ? selectedProfileIds : null;
 
     // Get channel_group_name from selected option text
     const channelGroupSelect = document.getElementById('channel_group_id');

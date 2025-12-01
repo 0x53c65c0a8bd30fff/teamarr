@@ -4211,6 +4211,7 @@ def api_event_epg_groups_create():
             data['channel_group_name'] = None
             data['stream_profile_id'] = None
             data['channel_profile_id'] = None
+            data['channel_profile_ids'] = None
 
         required = ['dispatcharr_group_id', 'dispatcharr_account_id', 'group_name', 'assigned_league', 'assigned_sport']
         for field in required:
@@ -4252,7 +4253,7 @@ def api_event_epg_groups_create():
             channel_group_id=data.get('channel_group_id'),
             channel_group_name=data.get('channel_group_name'),
             stream_profile_id=data.get('stream_profile_id'),
-            channel_profile_id=data.get('channel_profile_id'),
+            channel_profile_ids=data.get('channel_profile_ids'),
             custom_regex=data.get('custom_regex'),
             custom_regex_enabled=bool(data.get('custom_regex_enabled')),
             custom_regex_teams=data.get('custom_regex_teams'),
