@@ -5607,11 +5607,30 @@ def api_channel_info(channel_id):
         streams = get_channel_streams(channel_id, include_removed=False)
         history = get_channel_history(channel_id, limit=50)
 
-        # Get Dispatcharr URL for logo
+        # Get Dispatcharr settings
         conn = get_connection()
-        settings = dict(conn.execute("SELECT dispatcharr_url FROM settings WHERE id = 1").fetchone() or {})
+        settings_row = conn.execute(
+            "SELECT dispatcharr_url, dispatcharr_username, dispatcharr_password FROM settings WHERE id = 1"
+        ).fetchone()
         conn.close()
-        dispatcharr_url = settings.get('dispatcharr_url', '').rstrip('/')
+        dispatcharr_settings = dict(settings_row) if settings_row else {}
+        dispatcharr_url = dispatcharr_settings.get('dispatcharr_url', '').rstrip('/')
+
+        # Fetch EPG data ID from Dispatcharr if we have a channel ID
+        epg_data_id = None
+        if channel.get('dispatcharr_channel_id') and dispatcharr_url and dispatcharr_settings.get('dispatcharr_username'):
+            try:
+                from api.dispatcharr_client import ChannelManager
+                channel_mgr = ChannelManager(
+                    dispatcharr_url,
+                    dispatcharr_settings['dispatcharr_username'],
+                    dispatcharr_settings.get('dispatcharr_password', '')
+                )
+                dispatcharr_channel = channel_mgr.get_channel(channel['dispatcharr_channel_id'])
+                if dispatcharr_channel:
+                    epg_data_id = dispatcharr_channel.get('epg_data_id')
+            except Exception as e:
+                app.logger.debug(f"Could not fetch EPG data ID from Dispatcharr: {e}")
 
         # Build comprehensive response
         info = {
@@ -5659,6 +5678,9 @@ def api_channel_info(channel_id):
             'dispatcharr_logo_id': channel.get('dispatcharr_logo_id'),
             'logo_url': channel.get('logo_url'),
             'logo_cache_url': f"{dispatcharr_url}/api/channels/logos/{channel.get('dispatcharr_logo_id')}/cache/" if channel.get('dispatcharr_logo_id') and dispatcharr_url else None,
+
+            # EPG
+            'epg_data_id': epg_data_id,
 
             # Streams
             'primary_stream_id': channel.get('primary_stream_id'),
