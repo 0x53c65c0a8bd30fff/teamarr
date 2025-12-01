@@ -4166,6 +4166,52 @@ def api_dispatcharr_channel_profiles():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/dispatcharr/channel-profiles', methods=['POST'])
+def api_dispatcharr_channel_profiles_create():
+    """
+    Create a new channel profile in Dispatcharr.
+
+    Body:
+        name: str (required) - Profile name
+    """
+    from api.dispatcharr_client import ChannelManager
+
+    try:
+        data = request.get_json()
+        name = data.get('name', '').strip() if data else ''
+
+        if not name:
+            return jsonify({'error': 'Profile name is required'}), 400
+
+        conn = get_connection()
+        settings = dict(conn.execute("SELECT * FROM settings WHERE id = 1").fetchone())
+        conn.close()
+
+        if not settings.get('dispatcharr_url'):
+            return jsonify({'error': 'Dispatcharr not configured'}), 400
+
+        channel_mgr = ChannelManager(
+            settings['dispatcharr_url'],
+            settings['dispatcharr_username'],
+            settings['dispatcharr_password']
+        )
+
+        result = channel_mgr.create_channel_profile(name)
+
+        if result.get('success'):
+            return jsonify({
+                'success': True,
+                'profile': result.get('profile'),
+                'profile_id': result.get('profile_id')
+            })
+        else:
+            return jsonify({'error': result.get('error', 'Failed to create profile')}), 400
+
+    except Exception as e:
+        app.logger.error(f"Error creating channel profile: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/event-epg/groups', methods=['GET'])
 def api_event_epg_groups_list():
     """List all event EPG groups configured in Teamarr."""

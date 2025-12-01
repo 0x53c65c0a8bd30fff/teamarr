@@ -176,13 +176,23 @@
 
             <div class="form-group">
                 <label for="channel_profile_ids">Channel Profiles</label>
-                <div style="margin-bottom: 0.5rem;">
-                    <input type="text" id="channel-profile-filter" class="form-control" placeholder="Filter profiles..." oninput="filterChannelProfiles()">
+                <div style="margin-bottom: 0.5rem; display: flex; gap: 0.5rem;">
+                    <input type="text" id="channel-profile-filter" class="form-control" placeholder="Filter profiles..." oninput="filterChannelProfiles()" style="flex: 1;">
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="clearChannelProfiles()" title="Clear selection">Clear</button>
+                    <button type="button" class="btn btn-sm btn-secondary" onclick="toggleCreateChannelProfileForm()">+ New</button>
+                </div>
+                <div id="create-channel-profile-form" style="display: none; margin-bottom: 0.5rem; padding: 0.5rem; background: var(--bg-tertiary); border-radius: 4px;">
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <input type="text" id="new-channel-profile-name" class="form-control" placeholder="New profile name..." style="flex: 1;">
+                        <button type="button" class="btn btn-sm btn-success" onclick="createChannelProfileInline()">Create</button>
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="toggleCreateChannelProfileForm()">Cancel</button>
+                    </div>
+                    <div id="create-channel-profile-status" style="margin-top: 0.25rem; font-size: 0.75rem;"></div>
                 </div>
                 <select id="channel_profile_ids" name="channel_profile_ids" class="form-control" size="4" style="height: auto;" multiple>
                     <option value="">Loading profiles...</option>
                 </select>
-                <small class="form-help">Add created channels to these profiles (Ctrl/Cmd+click to select multiple). Leave blank to skip.</small>
+                <small class="form-help">Ctrl/Cmd+click to select multiple. Use Clear button to deselect all.</small>
                 </div>
             </div>
         </div><!-- end independent-settings -->
@@ -635,6 +645,60 @@ function filterChannelProfiles() {
             select.appendChild(option);
         }
     });
+}
+
+function clearChannelProfiles() {
+    const select = document.getElementById('channel_profile_ids');
+    Array.from(select.options).forEach(opt => opt.selected = false);
+}
+
+function toggleCreateChannelProfileForm() {
+    const form = document.getElementById('create-channel-profile-form');
+    form.style.display = form.style.display === 'none' ? 'block' : 'none';
+    if (form.style.display === 'block') {
+        document.getElementById('new-channel-profile-name').focus();
+    }
+}
+
+async function createChannelProfileInline() {
+    const name = document.getElementById('new-channel-profile-name').value.trim();
+    const statusDiv = document.getElementById('create-channel-profile-status');
+
+    if (!name) {
+        statusDiv.innerHTML = '<span style="color: var(--danger);">Please enter a profile name</span>';
+        return;
+    }
+
+    statusDiv.innerHTML = '<span style="color: var(--text-muted);">Creating...</span>';
+
+    try {
+        const response = await fetch('/api/dispatcharr/channel-profiles', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            statusDiv.innerHTML = '<span style="color: var(--success);">Created!</span>';
+            document.getElementById('new-channel-profile-name').value = '';
+
+            // Reload profiles and select the new one
+            await loadChannelProfiles();
+            const profileSelect = document.getElementById('channel_profile_ids');
+            const newOption = profileSelect.querySelector(`option[value="${data.profile_id}"]`);
+            if (newOption) newOption.selected = true;
+
+            setTimeout(() => {
+                toggleCreateChannelProfileForm();
+            }, 500);
+        } else {
+            statusDiv.innerHTML = `<span style="color: var(--danger);">${data.error || 'Failed to create profile'}</span>`;
+        }
+    } catch (error) {
+        statusDiv.innerHTML = `<span style="color: var(--danger);">Error: ${error.message}</span>`;
+    }
 }
 
 // ============================================================================

@@ -1821,6 +1821,40 @@ class ChannelManager:
             return response.json()
         return None
 
+    def create_channel_profile(self, name: str) -> Dict[str, Any]:
+        """
+        Create a new channel profile in Dispatcharr.
+
+        Args:
+            name: Profile name (required, max 100 chars)
+
+        Returns:
+            Result dict with:
+            - success: bool
+            - profile: dict (created profile data) if successful
+            - profile_id: int if successful
+            - error: str if failed
+        """
+        if not name or not name.strip():
+            return {"success": False, "error": "Profile name is required"}
+
+        payload = {'name': name.strip()}
+
+        response = self.auth.post("/api/channels/profiles/", payload)
+
+        if response is None:
+            return {"success": False, "error": "Request failed - no response"}
+
+        if response.status_code in (200, 201):
+            profile_data = response.json()
+            return {
+                "success": True,
+                "profile": profile_data,
+                "profile_id": profile_data.get('id')
+            }
+
+        return {"success": False, "error": self._parse_api_error(response)}
+
     def add_channel_to_profile(self, profile_id: int, channel_id: int) -> Dict[str, Any]:
         """
         Add a channel to a channel profile.
