@@ -60,12 +60,16 @@ class EPGOrchestrator:
         away_team = None
 
         for competitor in competitors:
-            # Handle score - can be a dict with 'value' key or missing
-            score_data = competitor.get('score', {})
-            if isinstance(score_data, dict):
-                score = score_data.get('value', 0)
-            else:
+            # Handle score - can be a string, int, or dict with 'value' key
+            score_data = competitor.get('score')
+            if score_data is None:
                 score = 0
+            elif isinstance(score_data, dict):
+                score = int(score_data.get('value', 0) or 0)
+            elif isinstance(score_data, str):
+                score = int(score_data) if score_data.isdigit() else 0
+            else:
+                score = int(score_data) if score_data else 0
 
             team_data = {
                 'id': competitor.get('id', ''),
