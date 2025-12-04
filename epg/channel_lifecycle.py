@@ -107,7 +107,8 @@ def generate_channel_name(
     event: Dict,
     template: Optional[Dict] = None,
     template_engine = None,
-    timezone: str = None
+    timezone: str = None,
+    exception_keyword: str = None
 ) -> str:
     """
     Generate channel name for an event.
@@ -120,6 +121,7 @@ def generate_channel_name(
         template: Optional event template with channel_name field
         template_engine: Optional template engine for variable resolution
         timezone: User's timezone for date/time formatting
+        exception_keyword: Optional matched exception keyword for sub-consolidation
 
     Returns:
         Channel name string
@@ -127,17 +129,22 @@ def generate_channel_name(
     # If template has channel_name and we have an engine, use it
     if template and template.get('channel_name') and template_engine:
         from epg.event_template_engine import build_event_context
-        ctx = build_event_context(event, {}, {}, timezone)
+        ctx = build_event_context(event, {}, {}, timezone, exception_keyword=exception_keyword)
         return template_engine.resolve(template['channel_name'], ctx)
 
-    # Default format: "Away @ Home"
+    # Default format: "Away @ Home" (with keyword suffix if present)
     home = event.get('home_team', {})
     away = event.get('away_team', {})
 
     home_name = home.get('shortDisplayName') or home.get('name', 'Home')
     away_name = away.get('shortDisplayName') or away.get('name', 'Away')
 
-    return f"{away_name} @ {home_name}"
+    base_name = f"{away_name} @ {home_name}"
+
+    # Append keyword to default name if present
+    if exception_keyword:
+        return f"{base_name} ({exception_keyword.title()})"
+    return base_name
 
 
 def should_create_channel(
@@ -1158,7 +1165,8 @@ class ChannelLifecycleManager:
                 event,
                 template=template,
                 template_engine=template_engine,
-                timezone=self.timezone
+                timezone=self.timezone,
+                exception_keyword=matched_keyword
             )
 
             # Calculate scheduled delete time (uses template duration if custom)

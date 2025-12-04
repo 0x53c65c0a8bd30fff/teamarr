@@ -5011,10 +5011,60 @@
         "NFL": "NE",
         "NBA": "BOS"
       }
+    },
+    {
+      "name": "exception_keyword",
+      "description": "Matched exception keyword for sub-consolidation (lowercase)",
+      "source": "Exception keyword matching",
+      "category": "🔧 Channel Settings",
+      "icon": "🏷️",
+      "type": "string",
+      "availability": "when_matched",
+      "context": [
+        "event"
+      ],
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball",
+        "soccer"
+      ],
+      "available_suffixes": [],
+      "examples_by_sport": {
+        "NFL": "prime vision",
+        "NBA": "league pass",
+        "NHL": "center ice"
+      }
+    },
+    {
+      "name": "exception_keyword_title",
+      "description": "Matched exception keyword for sub-consolidation (title case)",
+      "source": "Exception keyword matching",
+      "category": "🔧 Channel Settings",
+      "icon": "🏷️",
+      "type": "string",
+      "availability": "when_matched",
+      "context": [
+        "event"
+      ],
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball",
+        "soccer"
+      ],
+      "available_suffixes": [],
+      "examples_by_sport": {
+        "NFL": "Prime Vision",
+        "NBA": "League Pass",
+        "NHL": "Center Ice"
+      }
     }
   ],
   "base_variables_count": 113,
-  "total_variables_count": 248,
+  "total_variables_count": 250,
   "examples_by_sport_info": {
     "description": "Each variable has sport-specific example values representing realistic scenarios",
     "sports": [
@@ -5045,6 +5095,6 @@
     "generated": "2025-11-24"
   },
   "team_variables": 138,
-  "event_variables": 71,
+  "event_variables": 73,
   "shared_variables": 60
 }

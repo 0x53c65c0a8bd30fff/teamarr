@@ -396,6 +396,9 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
         # (e.g., game went final but channel hasn't been deleted yet)
         from database import get_managed_channels_for_group
 
+        # Create event_matcher for fetching events by ID (outside thread pool)
+        event_matcher = create_event_matcher(lookahead_days=lookahead_days)
+
         existing_channels = get_managed_channels_for_group(group_id)
         matched_event_ids = {m['event'].get('id') for m in matched_streams}
 
