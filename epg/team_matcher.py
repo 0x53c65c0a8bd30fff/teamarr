@@ -540,15 +540,16 @@ class TeamMatcher:
         """
         Find a team match in the given text.
 
-        Matching priority:
-        1. Exact match with primary name (team-specific: nickname, full name, abbrev)
-        2. Exact match with secondary name (location-only)
-        3. Primary name appears as whole word in text
-        4. Secondary name appears as whole word in text
-        5. Prefix/substring matches (fallback)
+        Matching priority (longer matches preferred within each tier):
+        1. Exact match - immediate return
+        2. Input text is prefix of a team's full name (e.g., "washington state" matches
+           "washington state cougars") - this catches partial team names
+        3. Team name appears as whole word in input text
+        4. Team name is prefix of input text (fallback)
 
-        This ensures "los angeles clippers" matches Clippers (via "clippers")
-        rather than Lakers (via "los angeles" location).
+        The key insight is that "washington state" should match Washington State Cougars
+        (because input is prefix of "washington state cougars") rather than Washington
+        Huskies (where "washington" appears as a word in input).
 
         Args:
             text: Normalized text to search in
@@ -561,16 +562,21 @@ class TeamMatcher:
         if not text:
             return None
 
-        # Track matches by priority tier
-        primary_word_match = None
-        primary_word_length = 0
-        secondary_word_match = None
-        secondary_word_length = 0
-        fallback_match = None
-        fallback_length = 0
+        # Track matches by tier, keeping the longest match in each tier
+        # Tier 1: Input is prefix of search name (e.g., "washington state" prefix of "washington state cougars")
+        input_prefix_match = None
+        input_prefix_length = 0
+
+        # Tier 2: Word boundary match (search name appears as whole word in input)
+        word_match = None
+        word_match_length = 0
+
+        # Tier 3: Search name is prefix of input (e.g., "washington" prefix of "washington state")
+        name_prefix_match = None
+        name_prefix_length = 0
 
         for team in teams:
-            # Check primary names first (team-specific: nickname, displayName, abbreviation)
+            # Check primary names (team-specific: nickname, displayName, abbreviation)
             for search_name in team.get('_primary_names', []):
                 if not search_name:
                     continue
@@ -580,15 +586,29 @@ class TeamMatcher:
                 if text == search_lower:
                     return team
 
-                # Whole word match with primary name
+                # Input is prefix of search name
+                # e.g., "washington state" is prefix of "washington state cougars"
+                if search_lower.startswith(text) and len(text) >= 3:
+                    if len(text) > input_prefix_length:
+                        input_prefix_match = team
+                        input_prefix_length = len(text)
+
+                # Whole word match
                 if len(search_lower) >= 3:
                     pattern = r'\b' + re.escape(search_lower) + r'\b'
                     if re.search(pattern, text):
-                        if len(search_lower) > primary_word_length:
-                            primary_word_match = team
-                            primary_word_length = len(search_lower)
+                        if len(search_lower) > word_match_length:
+                            word_match = team
+                            word_match_length = len(search_lower)
 
-            # Check secondary names (location-only, can be shared between teams)
+                # Search name is prefix of input
+                # e.g., "washington" is prefix of "washington state"
+                if text.startswith(search_lower) and len(search_lower) >= 3:
+                    if len(search_lower) > name_prefix_length:
+                        name_prefix_match = team
+                        name_prefix_length = len(search_lower)
+
+            # Check secondary names (location-only, lower priority)
             for search_name in team.get('_secondary_names', []):
                 if not search_name:
                     continue
@@ -598,34 +618,28 @@ class TeamMatcher:
                 if text == search_lower:
                     return team
 
-                # Whole word match with secondary name
+                # Only check word boundary for secondary names (not prefix matches)
+                # to avoid location-only matches taking precedence
                 if len(search_lower) >= 3:
                     pattern = r'\b' + re.escape(search_lower) + r'\b'
                     if re.search(pattern, text):
-                        if len(search_lower) > secondary_word_length:
-                            secondary_word_match = team
-                            secondary_word_length = len(search_lower)
+                        # Only use if we don't have a better primary match
+                        if len(search_lower) > word_match_length and not input_prefix_match:
+                            word_match = team
+                            word_match_length = len(search_lower)
 
-            # Fallback: check all search names for prefix/substring matches
-            for search_name in team.get('_search_names', []):
-                if not search_name:
-                    continue
-                search_lower = search_name.lower()
-
-                # Prefix match
-                if text.startswith(search_lower) or search_lower.startswith(text):
-                    match_len = max(len(search_lower), len(text))
-                    if match_len > fallback_length:
-                        fallback_match = team
-                        fallback_length = match_len
-
-        # Return by priority: primary word match beats secondary, which beats fallback
-        if primary_word_match:
-            return primary_word_match
-        if secondary_word_match:
-            return secondary_word_match
-        if fallback_match:
-            return fallback_match
+        # Return best match, preferring longer matches
+        # Compare across tiers - a significantly longer match should win
+        if input_prefix_match and input_prefix_length >= word_match_length:
+            return input_prefix_match
+        if word_match and word_match_length > name_prefix_length:
+            return word_match
+        if input_prefix_match:
+            return input_prefix_match
+        if word_match:
+            return word_match
+        if name_prefix_match:
+            return name_prefix_match
 
         return None
 
