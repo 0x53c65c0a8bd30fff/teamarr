@@ -310,7 +310,8 @@ def run_migrations(conn):
         # Event-based filtering stats (aggregated across all groups)
         ("event_total_streams", "INTEGER DEFAULT 0"),  # Sum of raw provider streams
         ("event_filtered_no_indicator", "INTEGER DEFAULT 0"),  # Sum filtered by built-in
-        ("event_filtered_exclude_regex", "INTEGER DEFAULT 0"),  # Sum filtered by user regex
+        ("event_filtered_include_regex", "INTEGER DEFAULT 0"),  # Sum not matching inclusion regex
+        ("event_filtered_exclude_regex", "INTEGER DEFAULT 0"),  # Sum filtered by exclusion regex
         ("event_filtered_outside_lookahead", "INTEGER DEFAULT 0"),  # Sum outside date range
         ("event_filtered_final", "INTEGER DEFAULT 0"),  # Sum of final events excluded
         ("event_eligible_streams", "INTEGER DEFAULT 0"),  # Sum of streams that passed filters
@@ -388,12 +389,15 @@ def run_migrations(conn):
             ("custom_regex_date_enabled", "INTEGER DEFAULT 0"),  # Enable custom date regex
             ("custom_regex_time", "TEXT"),
             ("custom_regex_time_enabled", "INTEGER DEFAULT 0"),  # Enable custom time regex
+            ("stream_include_regex", "TEXT"),  # User regex to include only matching streams
+            ("stream_include_regex_enabled", "INTEGER DEFAULT 0"),  # Enable inclusion regex
             ("stream_exclude_regex", "TEXT"),  # User regex to exclude streams from matching
             ("stream_exclude_regex_enabled", "INTEGER DEFAULT 0"),  # Enable exclusion regex
             ("skip_builtin_filter", "INTEGER DEFAULT 0"),  # Skip built-in game indicator filter
             # Filtering stats (per-group breakdown)
             ("total_stream_count", "INTEGER DEFAULT 0"),  # Raw count from provider
             ("filtered_no_indicator", "INTEGER DEFAULT 0"),  # No vs/@/at (built-in filter)
+            ("filtered_include_regex", "INTEGER DEFAULT 0"),  # Didn't match user's inclusion regex
             ("filtered_exclude_regex", "INTEGER DEFAULT 0"),  # Matched user's exclusion regex
             ("filtered_outside_lookahead", "INTEGER DEFAULT 0"),  # Date outside lookahead window
             ("filtered_final", "INTEGER DEFAULT 0"),  # Final events (when exclude setting on)
@@ -1562,6 +1566,8 @@ def create_event_epg_group(
     custom_regex_date_enabled: bool = False,
     custom_regex_time: str = None,
     custom_regex_time_enabled: bool = False,
+    stream_include_regex: str = None,
+    stream_include_regex_enabled: bool = False,
     stream_exclude_regex: str = None,
     stream_exclude_regex_enabled: bool = False,
     skip_builtin_filter: bool = False,
@@ -1584,6 +1590,8 @@ def create_event_epg_group(
         custom_regex_date_enabled: Enable custom date regex
         custom_regex_time: Optional regex pattern to extract game time
         custom_regex_time_enabled: Enable custom time regex
+        stream_include_regex: Optional regex to include only matching streams
+        stream_include_regex_enabled: Enable inclusion regex
         stream_exclude_regex: Optional regex to exclude streams from matching
         stream_exclude_regex_enabled: Enable exclusion regex
         skip_builtin_filter: Skip built-in game indicator filter
@@ -1616,9 +1624,10 @@ def create_event_epg_group(
              custom_regex_teams, custom_regex_teams_enabled,
              custom_regex_date, custom_regex_date_enabled,
              custom_regex_time, custom_regex_time_enabled,
+             stream_include_regex, stream_include_regex_enabled,
              stream_exclude_regex, stream_exclude_regex_enabled,
              skip_builtin_filter, parent_group_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 dispatcharr_group_id, dispatcharr_account_id, group_name,
@@ -1629,6 +1638,7 @@ def create_event_epg_group(
                 custom_regex_teams, 1 if custom_regex_teams_enabled else 0,
                 custom_regex_date, 1 if custom_regex_date_enabled else 0,
                 custom_regex_time, 1 if custom_regex_time_enabled else 0,
+                stream_include_regex, 1 if stream_include_regex_enabled else 0,
                 stream_exclude_regex, 1 if stream_exclude_regex_enabled else 0,
                 1 if skip_builtin_filter else 0, parent_group_id
             )
@@ -1689,6 +1699,7 @@ def update_event_epg_group_stats(
     matched_count: int,
     total_stream_count: int = None,
     filtered_no_indicator: int = None,
+    filtered_include_regex: int = None,
     filtered_exclude_regex: int = None,
     filtered_outside_lookahead: int = None,
     filtered_final: int = None
@@ -1702,6 +1713,7 @@ def update_event_epg_group_stats(
         matched_count: Streams matched to ESPN events
         total_stream_count: Raw count from provider (optional)
         filtered_no_indicator: Streams without vs/@/at (optional)
+        filtered_include_regex: Streams not matching inclusion regex (optional)
         filtered_exclude_regex: Streams matching exclusion regex (optional)
         filtered_outside_lookahead: Streams outside date range (optional)
         filtered_final: Final events excluded by setting (optional)
@@ -1719,6 +1731,9 @@ def update_event_epg_group_stats(
     if filtered_no_indicator is not None:
         fields.append("filtered_no_indicator = ?")
         values.append(filtered_no_indicator)
+    if filtered_include_regex is not None:
+        fields.append("filtered_include_regex = ?")
+        values.append(filtered_include_regex)
     if filtered_exclude_regex is not None:
         fields.append("filtered_exclude_regex = ?")
         values.append(filtered_exclude_regex)
@@ -2227,6 +2242,7 @@ def save_epg_generation_stats(stats: Dict[str, Any]) -> int:
             # Event-based filtering stats (aggregated across all groups)
             event_total_streams: int - raw streams from provider
             event_filtered_no_indicator: int - streams without vs/@/at
+            event_filtered_include_regex: int - streams not matching inclusion regex
             event_filtered_exclude_regex: int - streams matching exclusion regex
             event_filtered_outside_lookahead: int - past games
             event_filtered_final: int - final events (when excluded)
@@ -2258,10 +2274,11 @@ def save_epg_generation_stats(stats: Dict[str, Any]) -> int:
                 event_based_channels, event_based_events,
                 event_based_pregame, event_based_postgame,
                 event_total_streams, event_filtered_no_indicator,
-                event_filtered_exclude_regex, event_filtered_outside_lookahead,
+                event_filtered_include_regex, event_filtered_exclude_regex,
+                event_filtered_outside_lookahead,
                 event_filtered_final, event_eligible_streams, event_matched_streams,
                 unresolved_vars_count, coverage_gaps_count, warnings_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             stats.get('file_path', ''),
             stats.get('file_size', 0),
@@ -2291,6 +2308,7 @@ def save_epg_generation_stats(stats: Dict[str, Any]) -> int:
             # Event-based filtering stats
             stats.get('event_total_streams', 0),
             stats.get('event_filtered_no_indicator', 0),
+            stats.get('event_filtered_include_regex', 0),
             stats.get('event_filtered_exclude_regex', 0),
             stats.get('event_filtered_outside_lookahead', 0),
             stats.get('event_filtered_final', 0),

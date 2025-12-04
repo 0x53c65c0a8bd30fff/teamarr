@@ -278,6 +278,7 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
 
         # Track granular filtering stats
         filtered_no_indicator = 0
+        filtered_include_regex = 0
         filtered_exclude_regex = 0
 
         if skip_builtin_filter:
@@ -286,6 +287,11 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
             app.logger.debug(f"Skipping built-in filter (skip_builtin_filter enabled)")
         else:
             # Apply built-in filter (must have vs/@/at indicator)
+            # Only use include_regex if enabled
+            include_regex = None
+            if bool(group.get('stream_include_regex_enabled')) and group.get('stream_include_regex'):
+                include_regex = group['stream_include_regex']
+
             # Only use exclude_regex if enabled
             exclude_regex = None
             if bool(group.get('stream_exclude_regex_enabled')) and group.get('stream_exclude_regex'):
@@ -293,15 +299,17 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
 
             filter_result = filter_game_streams(
                 all_streams,
+                include_regex=include_regex,
                 exclude_regex=exclude_regex
             )
             streams = filter_result['game_streams']
             filtered_no_indicator = filter_result['filtered_no_indicator']
+            filtered_include_regex = filter_result['filtered_include_regex']
             filtered_exclude_regex = filter_result['filtered_exclude_regex']
-            filtered_count = filtered_no_indicator + filtered_exclude_regex
+            filtered_count = filtered_no_indicator + filtered_include_regex + filtered_exclude_regex
 
             if filtered_count > 0:
-                app.logger.debug(f"Filtered {filtered_count} non-game streams ({filtered_no_indicator} no indicator, {filtered_exclude_regex} exclude regex), {len(streams)} game streams remain")
+                app.logger.debug(f"Filtered {filtered_count} non-game streams ({filtered_no_indicator} no indicator, {filtered_include_regex} include regex, {filtered_exclude_regex} exclude regex), {len(streams)} game streams remain")
 
         # Step 3: Match streams to ESPN events (PARALLEL for speed)
         from concurrent.futures import ThreadPoolExecutor
@@ -444,6 +452,7 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
             matched_count=matched_count,
             total_stream_count=total_stream_count,
             filtered_no_indicator=filtered_no_indicator,
+            filtered_include_regex=filtered_include_regex,
             filtered_exclude_regex=filtered_exclude_regex,
             filtered_outside_lookahead=filtered_outside_lookahead,
             filtered_final=filtered_final
@@ -451,7 +460,7 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
 
         # Log with filtering info
         log_parts = [f"Matched {matched_count}/{effective_stream_count} streams for group '{group['group_name']}'"]
-        total_filtered = filtered_no_indicator + filtered_exclude_regex
+        total_filtered = filtered_no_indicator + filtered_include_regex + filtered_exclude_regex
         if total_filtered > 0:
             log_parts.append(f"{total_filtered} non-game filtered")
         if total_event_excluded > 0:
@@ -467,6 +476,7 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                 'total_stream_count': total_stream_count,
                 'stream_count': game_stream_count,
                 'filtered_no_indicator': filtered_no_indicator,
+                'filtered_include_regex': filtered_include_regex,
                 'filtered_exclude_regex': filtered_exclude_regex,
                 'filtered_outside_lookahead': filtered_outside_lookahead,
                 'filtered_final': filtered_final,
@@ -676,6 +686,7 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
             'total_stream_count': total_stream_count,
             'stream_count': game_stream_count,
             'filtered_no_indicator': filtered_no_indicator,
+            'filtered_include_regex': filtered_include_regex,
             'filtered_exclude_regex': filtered_exclude_regex,
             'filtered_outside_lookahead': filtered_outside_lookahead,
             'filtered_final': filtered_final,
@@ -754,6 +765,7 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
         # Filtering stats (aggregated across all groups)
         'total_streams': 0,
         'filtered_no_indicator': 0,
+        'filtered_include_regex': 0,
         'filtered_exclude_regex': 0,
         'filtered_outside_lookahead': 0,
         'filtered_final': 0,
@@ -940,6 +952,7 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
                                 event_stats['postgame'] += refresh_result.get('postgame_count', 0)
                                 event_stats['total_streams'] += refresh_result.get('total_stream_count', 0)
                                 event_stats['filtered_no_indicator'] += refresh_result.get('filtered_no_indicator', 0)
+                                event_stats['filtered_include_regex'] += refresh_result.get('filtered_include_regex', 0)
                                 event_stats['filtered_exclude_regex'] += refresh_result.get('filtered_exclude_regex', 0)
                                 event_stats['filtered_outside_lookahead'] += refresh_result.get('filtered_outside_lookahead', 0)
                                 event_stats['filtered_final'] += refresh_result.get('filtered_final', 0)
@@ -974,6 +987,7 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
                                 event_stats['postgame'] += refresh_result.get('postgame_count', 0)
                                 event_stats['total_streams'] += refresh_result.get('total_stream_count', 0)
                                 event_stats['filtered_no_indicator'] += refresh_result.get('filtered_no_indicator', 0)
+                                event_stats['filtered_include_regex'] += refresh_result.get('filtered_include_regex', 0)
                                 event_stats['filtered_exclude_regex'] += refresh_result.get('filtered_exclude_regex', 0)
                                 event_stats['filtered_outside_lookahead'] += refresh_result.get('filtered_outside_lookahead', 0)
                                 event_stats['filtered_final'] += refresh_result.get('filtered_final', 0)
@@ -1112,6 +1126,7 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
                 # Event-based filtering stats (aggregated across all groups)
                 'event_total_streams': event_stats['total_streams'],
                 'event_filtered_no_indicator': event_stats['filtered_no_indicator'],
+                'event_filtered_include_regex': event_stats['filtered_include_regex'],
                 'event_filtered_exclude_regex': event_stats['filtered_exclude_regex'],
                 'event_filtered_outside_lookahead': event_stats['filtered_outside_lookahead'],
                 'event_filtered_final': event_stats['filtered_final'],
@@ -3721,6 +3736,13 @@ def api_event_epg_dispatcharr_streams(group_id):
 
                 # Get filtering settings from db_group if configured
                 skip_builtin_filter = bool(db_group.get('skip_builtin_filter', 0)) if db_group else False
+                include_regex = None
+                if db_group and bool(db_group.get('stream_include_regex_enabled')) and db_group.get('stream_include_regex'):
+                    try:
+                        import re
+                        include_regex = re.compile(db_group['stream_include_regex'], re.IGNORECASE)
+                    except re.error:
+                        pass
                 exclude_regex = None
                 if db_group and bool(db_group.get('stream_exclude_regex_enabled')) and db_group.get('stream_exclude_regex'):
                     try:
@@ -3740,6 +3762,9 @@ def api_event_epg_dispatcharr_streams(group_id):
                         if not skip_builtin_filter and not has_game_indicator(stream_name):
                             is_filtered = True
                             filter_reason = get_display_text(FilterReason.NO_GAME_INDICATOR)
+                        elif include_regex and not include_regex.search(stream_name):
+                            is_filtered = True
+                            filter_reason = get_display_text(FilterReason.INCLUDE_REGEX_NOT_MATCHED)
                         elif exclude_regex and exclude_regex.search(stream_name):
                             is_filtered = True
                             filter_reason = get_display_text(FilterReason.EXCLUDE_REGEX_MATCHED)
@@ -3897,6 +3922,13 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
 
                     # Get filtering settings
                     skip_builtin_filter = bool(db_group.get('skip_builtin_filter', 0)) if db_group else False
+                    include_regex = None
+                    if db_group and bool(db_group.get('stream_include_regex_enabled')) and db_group.get('stream_include_regex'):
+                        try:
+                            import re
+                            include_regex = re.compile(db_group['stream_include_regex'], re.IGNORECASE)
+                        except re.error:
+                            pass
                     exclude_regex = None
                     if db_group and bool(db_group.get('stream_exclude_regex_enabled')) and db_group.get('stream_exclude_regex'):
                         try:
@@ -3928,6 +3960,12 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                                     'stream': stream,
                                     'filtered': True,
                                     'filter_reason': get_display_text(FilterReason.NO_GAME_INDICATOR)
+                                }
+                            if include_regex and not include_regex.search(stream_name):
+                                return {
+                                    'stream': stream,
+                                    'filtered': True,
+                                    'filter_reason': get_display_text(FilterReason.INCLUDE_REGEX_NOT_MATCHED)
                                 }
                             if exclude_regex and exclude_regex.search(stream_name):
                                 return {
@@ -4456,6 +4494,8 @@ def api_event_epg_groups_create():
             custom_regex_date_enabled=bool(data.get('custom_regex_date_enabled')),
             custom_regex_time=data.get('custom_regex_time'),
             custom_regex_time_enabled=bool(data.get('custom_regex_time_enabled')),
+            stream_include_regex=data.get('stream_include_regex'),
+            stream_include_regex_enabled=bool(data.get('stream_include_regex_enabled')),
             stream_exclude_regex=data.get('stream_exclude_regex'),
             stream_exclude_regex_enabled=bool(data.get('stream_exclude_regex_enabled')),
             skip_builtin_filter=bool(data.get('skip_builtin_filter')),

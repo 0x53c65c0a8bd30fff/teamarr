@@ -54,17 +54,25 @@ def has_game_indicator(stream_name: str) -> bool:
 
 def filter_game_streams(
     streams: List[Dict],
+    include_regex: str = None,
     exclude_regex: str = None
 ) -> Dict:
     """
     Filter streams to only those that appear to be game streams.
 
-    Two-layer filtering:
-    1. Built-in: Must have game indicator (vs/@/at/v)
-    2. Optional: User exclusion regex for additional filtering
+    Three-layer filtering:
+    1. Built-in: Must have game indicator (vs/@/at/v/x)
+    2. Optional: User inclusion regex (stream must match to be processed)
+    3. Optional: User exclusion regex (stream must NOT match to be processed)
+
+    Filter order matters:
+    - Include filter runs first (whitelist)
+    - Exclude filter runs second (blacklist)
+    - This allows: "include Washington teams, but exclude George Washington"
 
     Args:
         streams: List of stream dicts with 'name' key
+        include_regex: Optional regex pattern - only matching streams are processed
         exclude_regex: Optional regex pattern to exclude additional streams
 
     Returns:
@@ -72,6 +80,7 @@ def filter_game_streams(
         - 'game_streams': Streams that passed filtering
         - 'filtered_streams': All streams that were filtered out
         - 'filtered_no_indicator': Count of streams without vs/@/at
+        - 'filtered_include_regex': Count of streams not matching inclusion regex
         - 'filtered_exclude_regex': Count of streams matching exclusion regex
 
     Example:
@@ -89,7 +98,17 @@ def filter_game_streams(
     game_streams = []
     filtered_streams = []
     filtered_no_indicator = 0
+    filtered_include_regex = 0
     filtered_exclude_regex = 0
+
+    # Compile user inclusion pattern if provided
+    include_pattern = None
+    if include_regex:
+        try:
+            include_pattern = re.compile(include_regex, re.IGNORECASE)
+        except re.error:
+            # Invalid regex - log and continue without it
+            pass
 
     # Compile user exclusion pattern if provided
     exclude_pattern = None
@@ -109,7 +128,13 @@ def filter_game_streams(
             filtered_no_indicator += 1
             continue
 
-        # Layer 2: Check user exclusion pattern
+        # Layer 2: Check user inclusion pattern (must match to pass)
+        if include_pattern and not include_pattern.search(name):
+            filtered_streams.append(stream)
+            filtered_include_regex += 1
+            continue
+
+        # Layer 3: Check user exclusion pattern (must NOT match to pass)
         if exclude_pattern and exclude_pattern.search(name):
             filtered_streams.append(stream)
             filtered_exclude_regex += 1
@@ -121,6 +146,7 @@ def filter_game_streams(
         'game_streams': game_streams,
         'filtered_streams': filtered_streams,
         'filtered_no_indicator': filtered_no_indicator,
+        'filtered_include_regex': filtered_include_regex,
         'filtered_exclude_regex': filtered_exclude_regex,
     }
 

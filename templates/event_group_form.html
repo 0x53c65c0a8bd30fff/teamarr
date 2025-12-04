@@ -222,6 +222,23 @@
                     <div class="form-group regex-field-group">
                         <div class="regex-field-header">
                             <label class="checkbox-label">
+                                <input type="checkbox" id="stream_include_regex_enabled" name="stream_include_regex_enabled"
+                                       {% if group and group.stream_include_regex_enabled %}checked{% endif %}
+                                       onchange="toggleRegexField('stream_include_regex')">
+                                <span>Inclusion Pattern</span>
+                            </label>
+                        </div>
+                        <input type="text" id="stream_include_regex" name="stream_include_regex"
+                               class="form-control mono regex-input {% if not group or not group.stream_include_regex_enabled %}disabled-field{% endif %}"
+                               placeholder="e.g., Gonzaga|Washington State|Eastern Washington"
+                               value="{{ group.stream_include_regex if group and group.stream_include_regex else '' }}"
+                               {% if not group or not group.stream_include_regex_enabled %}disabled{% endif %}>
+                        <small class="form-help">Only streams matching this pattern will be processed.</small>
+                    </div>
+
+                    <div class="form-group regex-field-group">
+                        <div class="regex-field-header">
+                            <label class="checkbox-label">
                                 <input type="checkbox" id="stream_exclude_regex_enabled" name="stream_exclude_regex_enabled"
                                        {% if group and group.stream_exclude_regex_enabled %}checked{% endif %}
                                        onchange="toggleRegexField('stream_exclude_regex')">
@@ -233,6 +250,7 @@
                                placeholder="e.g., \(ES\)|\(ALT\)|All.?Star"
                                value="{{ group.stream_exclude_regex if group and group.stream_exclude_regex else '' }}"
                                {% if not group or not group.stream_exclude_regex_enabled %}disabled{% endif %}>
+                        <small class="form-help">Streams matching this pattern will be excluded.</small>
                     </div>
                 </div>
 
@@ -975,6 +993,7 @@ document.getElementById('event-group-form').addEventListener('submit', async fun
     // Checkbox fields that need boolean handling
     const checkboxFields = [
         'skip_builtin_filter',
+        'stream_include_regex_enabled',
         'stream_exclude_regex_enabled',
         'custom_regex_teams_enabled',
         'custom_regex_date_enabled',

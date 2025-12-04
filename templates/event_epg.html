@@ -235,7 +235,7 @@
                                     {% if group.account_name %}
                                         <span class="badge badge-secondary">{{ group.account_name }}</span>
                                     {% endif %}
-                                    {% if group.custom_regex_teams_enabled or group.custom_regex_date_enabled or group.custom_regex_time_enabled or group.stream_exclude_regex_enabled %}
+                                    {% if group.custom_regex_teams_enabled or group.custom_regex_date_enabled or group.custom_regex_time_enabled or group.stream_include_regex_enabled or group.stream_exclude_regex_enabled %}
                                         <span class="badge badge-info" title="Custom regex patterns configured">Regex</span>
                                     {% endif %}
                                 </div>
@@ -336,7 +336,7 @@
                                         {% if child.account_name %}
                                             <span class="badge badge-secondary" style="font-size: 0.65rem;">{{ child.account_name }}</span>
                                         {% endif %}
-                                        {% if child.custom_regex_teams_enabled or child.custom_regex_date_enabled or child.custom_regex_time_enabled or child.stream_exclude_regex_enabled %}
+                                        {% if child.custom_regex_teams_enabled or child.custom_regex_date_enabled or child.custom_regex_time_enabled or child.stream_include_regex_enabled or child.stream_exclude_regex_enabled %}
                                             <span class="badge badge-info" style="font-size: 0.65rem;" title="Custom regex patterns configured">Regex</span>
                                         {% endif %}
                                     </div>
