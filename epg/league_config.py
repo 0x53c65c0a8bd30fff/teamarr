@@ -14,8 +14,9 @@ logger = get_logger(__name__)
 
 # College leagues that need conference-based team fetching
 COLLEGE_LEAGUES = {
-    'ncaam', 'ncaaw', 'ncaaf',
-    'mens-college-basketball', 'womens-college-basketball', 'college-football'
+    'ncaam', 'ncaaw', 'ncaaf', 'ncaah', 'ncaavb-w', 'ncaavb-m',
+    'mens-college-basketball', 'womens-college-basketball', 'college-football',
+    'mens-college-hockey', 'womens-college-volleyball', 'mens-college-volleyball'
 }
 
 
