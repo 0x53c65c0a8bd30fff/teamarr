@@ -1110,6 +1110,14 @@ code {
     width: 20px;
     height: 20px;
     object-fit: contain;
+    flex-shrink: 0;
+}
+
+.multi-league-item > span:first-of-type {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .multi-league-item.primary {
@@ -1120,8 +1128,10 @@ code {
 .multi-league-item .league-category {
     font-size: 0.65rem;
     color: var(--text-muted);
-    margin-left: auto;
+    flex-shrink: 0;
     text-transform: capitalize;
+    text-align: right;
+    min-width: 70px;
 }
 
 /* Team logos in table */
