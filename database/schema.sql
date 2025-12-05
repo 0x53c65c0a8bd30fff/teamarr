@@ -691,20 +691,16 @@ BEGIN
 END;
 
 -- =============================================================================
--- CONSOLIDATION EXCEPTION KEYWORDS TABLE (Multi-Sport Feature v16)
--- Keyword patterns with configurable behavior for alternate broadcasts
+-- CONSOLIDATION EXCEPTION KEYWORDS TABLE
+-- Global keywords that override default duplicate_event_handling when matched
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS consolidation_exception_keywords (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    group_id INTEGER NOT NULL,                     -- Event group this applies to
     keywords TEXT NOT NULL,                        -- Comma-separated keyword variants (case-insensitive)
     behavior TEXT NOT NULL DEFAULT 'consolidate',  -- consolidate, separate, ignore
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (group_id) REFERENCES event_epg_groups(id) ON DELETE CASCADE
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
-
-CREATE INDEX IF NOT EXISTS idx_consolidation_keywords_group ON consolidation_exception_keywords(group_id);
 
 -- =============================================================================
 -- TEAM ALIASES TABLE (Event Channel EPG Feature)
@@ -970,18 +966,6 @@ CREATE TABLE IF NOT EXISTS team_league_cache_meta (
 );
 
 INSERT OR IGNORE INTO team_league_cache_meta (id) VALUES (1);
-
--- =============================================================================
--- CONSOLIDATION EXCEPTION KEYWORDS TABLE
--- Global keywords that override default duplicate_event_handling when matched
--- =============================================================================
-
-CREATE TABLE IF NOT EXISTS consolidation_exception_keywords (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    keywords TEXT NOT NULL,              -- Comma-separated variants, case-insensitive
-    behavior TEXT NOT NULL DEFAULT 'consolidate',  -- 'consolidate', 'separate', 'ignore'
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
 
 -- =============================================================================
 -- END OF SCHEMA

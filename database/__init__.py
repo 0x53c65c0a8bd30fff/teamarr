@@ -999,32 +999,8 @@ def run_migrations(conn):
         migrations_run += 1
         print("    ✅ Added multi-sport columns to event_epg_groups")
 
-        # Create consolidation_exception_keywords table
-        try:
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS consolidation_exception_keywords (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    group_id INTEGER NOT NULL,
-                    keywords TEXT NOT NULL,
-                    behavior TEXT NOT NULL DEFAULT 'consolidate',
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (group_id) REFERENCES event_epg_groups(id) ON DELETE CASCADE
-                )
-            """)
-            migrations_run += 1
-            print("    ✅ Created consolidation_exception_keywords table")
-        except Exception as e:
-            print(f"    ⚠️ Could not create consolidation_exception_keywords table: {e}")
-
-        # Create index for efficient lookup
-        try:
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_consolidation_keywords_group
-                ON consolidation_exception_keywords(group_id)
-            """)
-            print("    ✅ Created index on consolidation_exception_keywords(group_id)")
-        except Exception as e:
-            print(f"    ⚠️ Could not create index: {e}")
+        # Note: consolidation_exception_keywords table is global (not per-group)
+        # It was already created in an earlier migration, no changes needed
 
         # Add team_cache_refresh_frequency to settings
         add_columns_if_missing('settings', [
