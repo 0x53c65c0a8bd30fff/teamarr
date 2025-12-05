@@ -98,7 +98,7 @@ class TeamLeagueCache:
         Find all leagues a team name could belong to.
 
         Matches against team_name, team_abbrev, and team_short_name.
-        Case-insensitive.
+        Case-insensitive. Handles punctuation differences (apostrophes, periods).
 
         Args:
             team_name: Team name to search (e.g., "Predators", "NSH", "Nashville")
@@ -111,9 +111,15 @@ class TeamLeagueCache:
 
         team_lower = team_name.lower().strip()
 
+        # Also create a normalized version without punctuation for flexible matching
+        # This handles cases like "mount st mary's" matching "Mount St. Mary's"
+        import re
+        team_normalized = re.sub(r"[.'`]", '', team_lower)
+
         conn = get_connection()
         try:
             cursor = conn.cursor()
+            # First try exact match with punctuation
             cursor.execute("""
                 SELECT DISTINCT league_code FROM team_league_cache
                 WHERE LOWER(team_name) LIKE ?
@@ -121,7 +127,18 @@ class TeamLeagueCache:
                    OR LOWER(team_short_name) LIKE ?
             """, (f'%{team_lower}%', team_lower, f'%{team_lower}%'))
 
-            return {row[0] for row in cursor.fetchall()}
+            results = {row[0] for row in cursor.fetchall()}
+
+            # If no results and team has punctuation, try normalized search
+            if not results and team_normalized != team_lower:
+                cursor.execute("""
+                    SELECT DISTINCT league_code FROM team_league_cache
+                    WHERE REPLACE(REPLACE(REPLACE(LOWER(team_name), '.', ''), '''', ''), '`', '') LIKE ?
+                       OR REPLACE(REPLACE(REPLACE(LOWER(team_short_name), '.', ''), '''', ''), '`', '') LIKE ?
+                """, (f'%{team_normalized}%', f'%{team_normalized}%'))
+                results = {row[0] for row in cursor.fetchall()}
+
+            return results
         finally:
             conn.close()
 
@@ -156,6 +173,8 @@ class TeamLeagueCache:
         """
         Get full team info for all matches of a team name.
 
+        Handles punctuation differences (apostrophes, periods).
+
         Args:
             team_name: Team name to search
 
@@ -166,6 +185,10 @@ class TeamLeagueCache:
             return []
 
         team_lower = team_name.lower().strip()
+
+        # Also create a normalized version without punctuation for flexible matching
+        import re
+        team_normalized = re.sub(r"[.'`]", '', team_lower)
 
         conn = get_connection()
         try:
@@ -178,9 +201,21 @@ class TeamLeagueCache:
                    OR LOWER(team_short_name) LIKE ?
             """, (f'%{team_lower}%', team_lower, f'%{team_lower}%'))
 
+            rows = cursor.fetchall()
+
+            # If no results and team has punctuation, try normalized search
+            if not rows and team_normalized != team_lower:
+                cursor.execute("""
+                    SELECT espn_team_id, team_name, team_abbrev, team_short_name, sport, league_code
+                    FROM team_league_cache
+                    WHERE REPLACE(REPLACE(REPLACE(LOWER(team_name), '.', ''), '''', ''), '`', '') LIKE ?
+                       OR REPLACE(REPLACE(REPLACE(LOWER(team_short_name), '.', ''), '''', ''), '`', '') LIKE ?
+                """, (f'%{team_normalized}%', f'%{team_normalized}%'))
+                rows = cursor.fetchall()
+
             # Group by team_id
             teams_by_id = {}
-            for row in cursor.fetchall():
+            for row in rows:
                 team_id = row[0]
                 if team_id not in teams_by_id:
                     teams_by_id[team_id] = {
