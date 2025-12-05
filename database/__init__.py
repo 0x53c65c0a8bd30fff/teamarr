@@ -1766,8 +1766,31 @@ def update_event_epg_group(group_id: int, data: Dict[str, Any]) -> bool:
 
 
 def delete_event_epg_group(group_id: int) -> bool:
-    """Delete an event EPG group."""
-    return db_execute("DELETE FROM event_epg_groups WHERE id = ?", (group_id,)) > 0
+    """Delete an event EPG group and any child groups that reference it."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+
+        # First delete any child groups that have this as parent
+        cursor.execute("DELETE FROM event_epg_groups WHERE parent_group_id = ?", (group_id,))
+        children_deleted = cursor.rowcount
+
+        # Then delete the group itself
+        cursor.execute("DELETE FROM event_epg_groups WHERE id = ?", (group_id,))
+        group_deleted = cursor.rowcount > 0
+
+        conn.commit()
+
+        if children_deleted > 0:
+            import logging
+            logging.getLogger(__name__).info(f"Deleted {children_deleted} child group(s) when deleting parent group {group_id}")
+
+        return group_deleted
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
 
 
 def update_event_epg_group_stats(
