@@ -836,7 +836,7 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
         results = []
 
         if streams:  # Only use ThreadPoolExecutor if there are streams to process
-            with ThreadPoolExecutor(max_workers=min(len(streams), 50)) as executor:
+            with ThreadPoolExecutor(max_workers=min(len(streams), 100)) as executor:
                 results = list(executor.map(match_single_stream, streams))
 
         # Process results
@@ -1351,7 +1351,7 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
 
                 # Process parent groups first (can run in parallel)
                 if parent_groups:
-                    with ThreadPoolExecutor(max_workers=min(len(parent_groups), 50)) as executor:
+                    with ThreadPoolExecutor(max_workers=min(len(parent_groups), 100)) as executor:
                         futures = {executor.submit(process_single_group, g): g for g in parent_groups}
                         for future in as_completed(futures):
                             group, refresh_result, error = future.result()
@@ -1386,7 +1386,7 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
                 # Process child groups after parents (can run in parallel)
                 if child_groups:
                     app.logger.debug(f"Processing {len(child_groups)} child group(s)...")
-                    with ThreadPoolExecutor(max_workers=min(len(child_groups), 50)) as executor:
+                    with ThreadPoolExecutor(max_workers=min(len(child_groups), 100)) as executor:
                         futures = {executor.submit(process_single_group, g): g for g in child_groups}
                         for future in as_completed(futures):
                             group, refresh_result, error = future.result()
@@ -4956,10 +4956,10 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                     # Select the appropriate matcher
                     match_func = match_single_stream_multi if is_multi_sport else match_single_stream_single
 
-                    # Process streams in parallel (max 50 workers)
+                    # Process streams in parallel (max 100 workers)
                     match_results = []
                     if streams:
-                        with ThreadPoolExecutor(max_workers=min(len(streams), 50)) as executor:
+                        with ThreadPoolExecutor(max_workers=min(len(streams), 100)) as executor:
                             match_results = list(executor.map(match_func, streams))
 
                     # Process results

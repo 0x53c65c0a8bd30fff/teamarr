@@ -128,7 +128,7 @@ LEAGUE_TAG_PATTERNS = {
 }
 
 # Thread pool size for parallel fetching
-MAX_WORKERS = 50
+MAX_WORKERS = 100
 
 
 # =============================================================================

@@ -50,7 +50,7 @@ NON_SOCCER_LEAGUES = [
 ]
 
 # Thread pool size for parallel fetching
-MAX_WORKERS = 12  # Fewer than soccer since we have fewer leagues
+MAX_WORKERS = 100
 
 
 # =============================================================================
