@@ -641,7 +641,7 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                                 detection_tier = '3b'  # Time-only disambiguation
                             else:
                                 detection_tier = '3c'  # Closest game
-                            logger.debug(f"Multi-league disambiguation: {len(leagues_with_games)} leagues have games, "
+                            app.logger.debug(f"Multi-league disambiguation: {len(leagues_with_games)} leagues have games, "
                                        f"selected {detected_league} (time_diff={leagues_with_games[0][3]} mins)")
 
                         # If no active game found but we found final games, use that league
@@ -807,7 +807,7 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
 
                     # Log tier for debugging multi-league detection
                     if detection_tier:
-                        logger.debug(f"[TIER {detection_tier}] {stream['name'][:50]}... → {detected_league.upper()}")
+                        app.logger.debug(f"[TIER {detection_tier}] {stream['name'][:50]}... → {detected_league.upper()}")
 
                     return {
                         'type': 'matched',
@@ -4837,7 +4837,7 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                                         # Multiple leagues have games - pick best time match
                                         leagues_with_games.sort(key=lambda x: x[3])  # Sort by time_diff
                                         detected_league, team_result, _, _ = leagues_with_games[0]
-                                        logger.debug(f"Multi-league disambiguation: {len(leagues_with_games)} leagues have games, "
+                                        app.logger.debug(f"Multi-league disambiguation: {len(leagues_with_games)} leagues have games, "
                                                    f"selected {detected_league} (time_diff={leagues_with_games[0][3]} mins)")
 
                                     # If no active game found but we found final games, use that league

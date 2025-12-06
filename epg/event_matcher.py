@@ -11,6 +11,7 @@ This module bridges the gap between:
 Enrichment is delegated to EventEnricher for consistency with other EPG paths.
 """
 
+import threading
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any, Tuple, TYPE_CHECKING
 from zoneinfo import ZoneInfo
@@ -78,9 +79,53 @@ class EventMatcher:
         # Cache for league config
         self._league_config: Dict[str, Dict] = {}
 
+        # Scoreboard cache: key = "sport:league:YYYYMMDD" → scoreboard data
+        # Thread-safe with double-checked locking
+        self._scoreboard_cache: Dict[str, Optional[Dict]] = {}
+        self._scoreboard_cache_lock = threading.Lock()
+
     def _get_league_config(self, league_code: str) -> Optional[Dict]:
         """Get league configuration (sport, api_path) using shared module."""
         return get_league_config(league_code, self.db_connection_func, self._league_config)
+
+    def clear_scoreboard_cache(self):
+        """Clear scoreboard cache. Call at start of each EPG generation."""
+        with self._scoreboard_cache_lock:
+            self._scoreboard_cache.clear()
+
+    def _get_scoreboard_cached(self, sport: str, api_league: str, date_str: str) -> Optional[Dict]:
+        """
+        Get scoreboard data with thread-safe caching.
+
+        Args:
+            sport: Sport name (e.g., 'soccer', 'football')
+            api_league: API league path (e.g., 'eng.1', 'nfl')
+            date_str: Date string in YYYYMMDD format
+
+        Returns:
+            Scoreboard data dict or None if fetch failed
+        """
+        cache_key = f"{sport}:{api_league}:{date_str}"
+
+        # Fast path: check without lock
+        if cache_key in self._scoreboard_cache:
+            return self._scoreboard_cache[cache_key]
+
+        # Slow path: acquire lock and fetch
+        with self._scoreboard_cache_lock:
+            # Double-check after acquiring lock
+            if cache_key in self._scoreboard_cache:
+                return self._scoreboard_cache[cache_key]
+
+            # Fetch from API
+            try:
+                scoreboard_data = self.espn.get_scoreboard(sport, api_league, date_str)
+                self._scoreboard_cache[cache_key] = scoreboard_data
+                return scoreboard_data
+            except Exception as e:
+                logger.warning(f"Error fetching scoreboard for {cache_key}: {e}")
+                self._scoreboard_cache[cache_key] = None
+                return None
 
     def _filter_matching_events(
         self,
@@ -332,27 +377,23 @@ class EventMatcher:
 
             logger.debug(f"[TRACE] _search_scoreboard | checking {date_str} for teams {team1_id} vs {team2_id}")
 
-            try:
-                scoreboard_data = self.espn.get_scoreboard(sport, api_league, date_str)
-                if not scoreboard_data or 'events' not in scoreboard_data:
+            # Use cached scoreboard fetch
+            scoreboard_data = self._get_scoreboard_cached(sport, api_league, date_str)
+            if not scoreboard_data or 'events' not in scoreboard_data:
+                continue
+
+            for sb_event in scoreboard_data.get('events', []):
+                # Check if this event involves both teams
+                competitions = sb_event.get('competitions', [])
+                if not competitions:
                     continue
 
-                for sb_event in scoreboard_data.get('events', []):
-                    # Check if this event involves both teams
-                    competitions = sb_event.get('competitions', [])
-                    if not competitions:
-                        continue
+                competitors = competitions[0].get('competitors', [])
+                team_ids_in_event = {str(c.get('team', {}).get('id', '')) for c in competitors}
 
-                    competitors = competitions[0].get('competitors', [])
-                    team_ids_in_event = {str(c.get('team', {}).get('id', '')) for c in competitors}
-
-                    if str(team1_id) in team_ids_in_event and str(team2_id) in team_ids_in_event:
-                        candidate_events.append(sb_event)
-                        logger.debug(f"[TRACE] _search_scoreboard | candidate: {sb_event.get('name')} on {sb_event.get('date')}")
-
-            except Exception as e:
-                logger.warning(f"[TRACE] _search_scoreboard | error fetching scoreboard for {date_str}: {e}")
-                continue
+                if str(team1_id) in team_ids_in_event and str(team2_id) in team_ids_in_event:
+                    candidate_events.append(sb_event)
+                    logger.debug(f"[TRACE] _search_scoreboard | candidate: {sb_event.get('name')} on {sb_event.get('date')}")
 
         if not candidate_events:
             logger.debug(f"[TRACE] _search_scoreboard | no candidates found for {team1_id} vs {team2_id}")
