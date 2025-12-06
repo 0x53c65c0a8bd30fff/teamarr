@@ -49,12 +49,34 @@ def strip_team_numbers(name: str) -> str:
     return stripped
 
 
+def strip_accents(text: str) -> str:
+    """
+    Remove diacritical marks (accents) from text.
+
+    Handles common accented characters in European team names:
+    - Spanish: á, é, í, ó, ú, ñ, ü
+    - German: ä, ö, ü, ß
+    - French: à, â, ç, è, é, ê, ë, î, ï, ô, û, ù, ÿ
+    - Portuguese: ã, õ
+
+    Uses Unicode normalization (NFD) to decompose characters,
+    then removes combining marks.
+    """
+    import unicodedata
+    # NFD decomposition separates base characters from combining marks
+    # e.g., 'é' becomes 'e' + combining acute accent
+    nfkd = unicodedata.normalize('NFD', text)
+    # Keep only characters that aren't combining marks
+    return ''.join(c for c in nfkd if not unicodedata.combining(c))
+
+
 def normalize_team_name(name: str, strip_articles: bool = False) -> str:
     """
     Normalize team name for fuzzy matching.
 
+    - Removes accents (Atlético -> Atletico)
     - Strips numbers (SV 07 Elversberg -> SV Elversberg)
-    - Optionally removes common articles/prepositions (Atlético de Madrid -> Atlético Madrid)
+    - Optionally removes common articles/prepositions (Atlético de Madrid -> Atletico Madrid)
     - Normalizes whitespace
 
     Note: Article stripping is OFF by default because it can break team names like
@@ -62,10 +84,12 @@ def normalize_team_name(name: str, strip_articles: bool = False) -> str:
 
     Args:
         name: Team name to normalize
-        strip_articles: If True, also remove articles (de, del, la, el, etc.)
-                       Default False - only strip numbers and normalize whitespace.
+        strip_articles: If True, also remove articles (de, del, da, do, di, du)
+                       Default False - only strip accents, numbers, and normalize whitespace.
     """
-    normalized = name.lower().strip()
+    # First strip accents - this is always safe and helps match
+    # "Atletico" (stream) to "Atlético" (DB)
+    normalized = strip_accents(name.lower().strip())
 
     if strip_articles:
         # Remove common articles/prepositions that vary between sources
@@ -466,7 +490,15 @@ class LeagueDetector:
             team2_lower = team2.lower().strip()
 
             def find_leagues_for_team(team_name: str) -> set:
-                """Find leagues for a team with fallback to number-stripped and article-stripped search"""
+                """
+                Find leagues for a team with tiered fallback search.
+
+                Tiers:
+                1. Direct match (exact or substring)
+                2. Accent-normalized match (Atletico -> Atlético)
+                3. Number-stripped match (SV Elversberg -> SV 07 Elversberg)
+                4. Article-stripped match (Atlético de Madrid -> Atlético Madrid)
+                """
                 # Tier 1: Direct match
                 cursor.execute("""
                     SELECT DISTINCT league_slug FROM soccer_team_leagues
@@ -479,7 +511,24 @@ class LeagueDetector:
                 if leagues:
                     return leagues
 
-                # Tier 2: Strip numbers from both search term and DB values
+                # Tier 2: Accent-normalized match
+                # Handles "Atletico" (stream) matching "Atlético" (DB)
+                # SQLite can't strip accents natively, so we fetch candidates and filter
+                search_normalized = strip_accents(team_name)
+                # Always try accent-normalized search - the search term may not have accents
+                # but the DB values do (Atletico in stream, Atlético in DB)
+                cursor.execute("""
+                    SELECT league_slug, team_name FROM soccer_team_leagues
+                """)
+                for row in cursor.fetchall():
+                    db_normalized = strip_accents(row[1].lower())
+                    if search_normalized in db_normalized or db_normalized in search_normalized:
+                        leagues.add(row[0])
+                if leagues:
+                    logger.debug(f"Found leagues via accent-stripped search: '{team_name}' -> '{search_normalized}'")
+                    return leagues
+
+                # Tier 3: Strip numbers from both search term and DB values
                 # Handles "SV Elversberg" matching "SV 07 Elversberg"
                 stripped = normalize_team_name(team_name, strip_articles=False)
 
@@ -493,18 +542,23 @@ class LeagueDetector:
                         logger.debug(f"Found leagues via number-stripped search: '{team_name}' -> '{stripped}'")
                         return leagues
 
-                # Tier 3: Also strip common articles (de, del, da, do, di, du)
+                # Tier 4: Also strip common articles (de, del, da, do, di, du)
                 # Handles "Atlético de Madrid" matching "Atlético Madrid"
                 # This is conservative - only strips prepositions, not "el/la/los/las"
                 normalized = normalize_team_name(team_name, strip_articles=True)
 
                 if normalized and normalized != stripped:
-                    # Search for normalized name anywhere in DB team name
+                    # Search for normalized name anywhere in DB team name (accent-stripped)
                     cursor.execute("""
-                        SELECT DISTINCT league_slug FROM soccer_team_leagues
-                        WHERE LOWER(team_name) LIKE ?
-                    """, (f"%{normalized}%",))
-                    leagues = {row[0] for row in cursor.fetchall()}
+                        SELECT league_slug, team_name FROM soccer_team_leagues
+                    """)
+                    for row in cursor.fetchall():
+                        db_normalized = strip_accents(row[1].lower())
+                        # Strip articles from DB value too for comparison
+                        db_articles_stripped = re.sub(r'\b(de|del|da|do|di|du)\b', '', db_normalized, flags=re.I)
+                        db_articles_stripped = re.sub(r'\s+', ' ', db_articles_stripped).strip()
+                        if normalized in db_articles_stripped:
+                            leagues.add(row[0])
                     if leagues:
                         logger.debug(f"Found leagues via article-stripped search: '{team_name}' -> '{normalized}'")
                         return leagues
@@ -575,8 +629,17 @@ class LeagueDetector:
             cursor = conn.cursor()
 
             def find_team_in_league(team_name: str, league: str) -> Optional[tuple]:
-                """Find a team in a league with tiered fallback matching"""
+                """
+                Find a team in a league with tiered fallback matching.
+
+                Tiers:
+                1. Direct match (exact or substring)
+                2. Accent-normalized match (Atletico -> Atlético)
+                3. Number-stripped match (SV Elversberg -> SV 07 Elversberg)
+                4. Article-stripped match (Atlético de Madrid -> Atlético Madrid)
+                """
                 team_lower = team_name.lower().strip()
+                team_accent_stripped = strip_accents(team_lower)
                 team_stripped = normalize_team_name(team_lower, strip_articles=False)
                 team_normalized = normalize_team_name(team_lower, strip_articles=True)
 
@@ -595,7 +658,19 @@ class LeagueDetector:
                 if row:
                     return row
 
-                # Tier 2: Number-stripped match
+                # Tier 2: Accent-normalized match
+                # Handles "Atletico" (stream) matching "Atlético" (DB)
+                cursor.execute("""
+                    SELECT espn_team_id, team_name FROM soccer_team_leagues
+                    WHERE league_slug = ?
+                """, (league,))
+                for row in cursor.fetchall():
+                    db_normalized = strip_accents(row[1].lower())
+                    if team_accent_stripped in db_normalized or db_normalized in team_accent_stripped:
+                        logger.debug(f"Team '{team_name}' matched via accent-stripping: {row[1]}")
+                        return row
+
+                # Tier 3: Number-stripped match
                 if team_stripped != team_lower:
                     cursor.execute(f"""
                         SELECT espn_team_id, team_name FROM soccer_team_leagues
@@ -612,18 +687,21 @@ class LeagueDetector:
                         logger.debug(f"Team '{team_name}' matched via number-stripping: {row[1]}")
                         return row
 
-                # Tier 3: Article-stripped match (de, del, da, do, di, du)
+                # Tier 4: Article-stripped match (de, del, da, do, di, du)
                 if team_normalized != team_stripped:
+                    # Search with both accent and article stripping
                     cursor.execute("""
                         SELECT espn_team_id, team_name FROM soccer_team_leagues
-                        WHERE league_slug = ? AND LOWER(team_name) LIKE ?
-                        ORDER BY LENGTH(team_name) ASC
-                        LIMIT 1
-                    """, (league, f"%{team_normalized}%"))
-                    row = cursor.fetchone()
-                    if row:
-                        logger.debug(f"Team '{team_name}' matched via article-stripping: {row[1]}")
-                        return row
+                        WHERE league_slug = ?
+                    """, (league,))
+                    for row in cursor.fetchall():
+                        db_normalized = strip_accents(row[1].lower())
+                        # Strip articles from DB value too
+                        db_articles_stripped = re.sub(r'\b(de|del|da|do|di|du)\b', '', db_normalized, flags=re.I)
+                        db_articles_stripped = re.sub(r'\s+', ' ', db_articles_stripped).strip()
+                        if team_normalized in db_articles_stripped:
+                            logger.debug(f"Team '{team_name}' matched via article-stripping: {row[1]}")
+                            return row
 
                 return None
 
