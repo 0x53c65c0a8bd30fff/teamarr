@@ -986,7 +986,7 @@ function renderPreviewStreams(streams, totalCount, filteredCount, customRegexInf
         if (teamMatch.filtered) {
             teamHtml = `<span class="text-muted" style="font-style: italic;">Filtered</span>`;
         } else if (teamMatch.matched) {
-            teamHtml = `<span class="text-success">${escapeHtml(teamMatch.away_team_name?.split(' ').pop() || '?')} @ ${escapeHtml(teamMatch.home_team_name?.split(' ').pop() || '?')}</span>`;
+            teamHtml = `<span class="text-success">${escapeHtml(teamMatch.away_team_name || '?')} @ ${escapeHtml(teamMatch.home_team_name || '?')}</span>`;
         } else if (teamMatch.parsed_teams) {
             // Teams were parsed but not found in ESPN - show what was parsed
             const t1 = teamMatch.parsed_teams.team1 || '?';
@@ -1012,17 +1012,17 @@ function renderPreviewStreams(streams, totalCount, filteredCount, customRegexInf
             statusHtml = `<span class="text-danger" style="font-weight: 600;">Event is final (excluded)</span>`;
         } else if (!teamMatch.matched) {
             // Team parsing failed or teams not found in ESPN
-            const detail = teamMatch.detail || 'Teams not parsed';
+            const detail = teamMatch.detail || teamMatch.reason || 'Teams not parsed';
             const parsedTeams = teamMatch.parsed_teams;
             if (parsedTeams) {
                 // Teams were parsed but not found in ESPN database
                 statusHtml = `<span class="text-warning" title="${escapeHtml(detail)}">${escapeHtml(detail)}</span>`;
             } else {
-                statusHtml = `<span class="text-warning">Teams not parsed</span>`;
+                statusHtml = `<span class="text-warning">${escapeHtml(detail)}</span>`;
             }
         } else {
-            // Teams parsed but no event found
-            const reason = eventMatch.reason || 'No event found';
+            // Teams matched but no event found - show specific reason
+            const reason = eventMatch.reason || 'No game scheduled';
             statusHtml = `<span class="text-danger">${escapeHtml(reason)}</span>`;
         }
 

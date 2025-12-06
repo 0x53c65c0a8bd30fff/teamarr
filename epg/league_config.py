@@ -108,33 +108,32 @@ def is_college_league(league_code: str) -> bool:
 
 def is_soccer_league(league_code: str) -> bool:
     """
-    Check if a league is a soccer league.
+    Check if a league is a soccer league by checking the soccer cache.
 
     Args:
-        league_code: League code to check (e.g., 'epl', 'eng.1', 'soccer/eng.1')
+        league_code: League code to check (e.g., 'eng.1', 'aus.1', 'usa.ncaa.m.1')
 
     Returns:
         True if soccer league, False otherwise
     """
     league_lower = league_code.lower()
 
-    # Check known soccer league codes
-    soccer_codes = {'mls', 'epl', 'laliga', 'bundesliga', 'seriea', 'ligue1', 'nwsl', 'efl', 'efl1'}
-    if league_lower in soccer_codes:
-        return True
-
-    # Check API path patterns (eng.1, esp.1, usa.1, etc.)
-    if 'soccer' in league_lower:
-        return True
-
-    # Check common soccer API path suffixes
-    soccer_prefixes = ('eng.', 'esp.', 'ger.', 'ita.', 'fra.', 'usa.1', 'ned.', 'por.', 'sco.')
-    for prefix in soccer_prefixes:
-        if prefix in league_lower:
+    # Check if league exists in soccer cache (covers 240+ leagues)
+    try:
+        from database import get_connection
+        conn = get_connection()
+        cursor = conn.execute(
+            "SELECT 1 FROM soccer_team_leagues WHERE league_slug = ? LIMIT 1",
+            (league_lower,)
+        )
+        if cursor.fetchone():
             return True
+    except Exception:
+        pass
 
-    # Check NCAA soccer patterns (usa.ncaa.m.1, usa.ncaa.w.1)
-    if 'usa.ncaa' in league_lower and league_lower.endswith('.1'):
+    # Fallback: Check league_config for sport='soccer'
+    config = get_league_config(league_code)
+    if config and config.get('sport') == 'soccer':
         return True
 
     return False

@@ -380,8 +380,11 @@ class MultiSportMatcher:
                 result.api_path_override = detected_api_path_override
                 return result
             else:
-                # Event not found - return the reason
+                # Event not found - include team info so UI knows teams WERE parsed
                 result.reason = event_result.get('reason', 'No game found')
+                result.team_result = team_result  # Include team info for UI
+                result.parsed_teams = {'team1': raw_team1, 'team2': raw_team2}
+                result.detected_league = detected_league
                 return result
 
         except Exception as e:
