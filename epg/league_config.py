@@ -133,6 +133,10 @@ def is_soccer_league(league_code: str) -> bool:
         if prefix in league_lower:
             return True
 
+    # Check NCAA soccer patterns (usa.ncaa.m.1, usa.ncaa.w.1)
+    if 'usa.ncaa' in league_lower and league_lower.endswith('.1'):
+        return True
+
     return False
 
 
