@@ -240,7 +240,7 @@
                                     {% endif %}
                                 </div>
                             </td>
-                            <td style="text-align: center;">
+                            <td style="text-align: center; vertical-align: middle;">
                                 {% if group.is_multi_sport %}
                                 <span class="multi-sport-badge" title="Multi-Sport / Multi-League">MUL</span>
                                 {% else %}
@@ -347,7 +347,7 @@
                                         {% endif %}
                                     </div>
                                 </td>
-                                <td style="text-align: center;">
+                                <td style="text-align: center; vertical-align: middle;">
                                     <img src="{{ league_logos.get(child.assigned_league, '') }}"
                                          alt="{{ child.assigned_league.upper() }}"
                                          class="league-logo"
