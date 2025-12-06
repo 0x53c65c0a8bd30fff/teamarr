@@ -2083,15 +2083,15 @@ class EPGOrchestrator:
         }
 
     def _get_head_coach(self, team_id: str, league: str) -> str:
-        """Fetch head coach name from roster API"""
+        """Fetch head coach name from roster API (cached per generation)"""
         # ESPN's soccer coach data is completely unreliable - returns wrong managers
         # or managers who never even worked at those clubs. Skip for soccer leagues.
         if SoccerCompat.should_skip_coach(league):
             return ''
 
         try:
-            url = f"{self.espn.base_url}/{league}/teams/{team_id}/roster"
-            roster_data = self.espn._make_request(url)
+            # Use cached roster fetch
+            roster_data = self.espn.get_team_roster(league, team_id)
 
             if roster_data and 'coach' in roster_data and roster_data['coach']:
                 coaches = roster_data['coach']

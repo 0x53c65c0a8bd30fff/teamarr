@@ -280,37 +280,37 @@ class TeamMatcher:
 
         # Double-check lock pattern: re-check cache after acquiring lock
         # Another thread may have populated the cache while we were getting config
+        # IMPORTANT: Fetch must happen INSIDE the lock to prevent race conditions
         with _shared_team_cache_lock:
             if league_lower in _shared_team_cache:
                 cached = _shared_team_cache[league_lower]
                 if datetime.now() - cached['fetched_at'] < self.CACHE_DURATION:
                     return cached['teams']
 
-        # College leagues need conference-based fetching
-        if is_college_league(league_lower) or is_college_league(league):
-            teams = self._fetch_college_teams(sport, league)
-        else:
-            # Pro leagues - simple team list
-            logger.info(f"Fetching teams for {league_code} from ESPN API")
-            teams = self.espn.get_league_teams(sport, league)
+            # College leagues need conference-based fetching
+            if is_college_league(league_lower) or is_college_league(league):
+                teams = self._fetch_college_teams(sport, league)
+            else:
+                # Pro leagues - simple team list
+                logger.info(f"Fetching teams for {league_code} from ESPN API")
+                teams = self.espn.get_league_teams(sport, league)
 
-        if not teams:
-            logger.warning(f"No teams returned for {league_code}")
-            return []
+            if not teams:
+                logger.warning(f"No teams returned for {league_code}")
+                return []
 
-        # Build search index with normalized names
-        for team in teams:
-            team['_search_names'] = self._build_search_names(team)
+            # Build search index with normalized names
+            for team in teams:
+                team['_search_names'] = self._build_search_names(team)
 
-        # Cache results in shared cache (with lock)
-        with _shared_team_cache_lock:
+            # Cache results
             _shared_team_cache[league_lower] = {
                 'teams': teams,
                 'fetched_at': datetime.now()
             }
 
-        logger.info(f"Cached {len(teams)} teams for {league_code}")
-        return teams
+            logger.info(f"Cached {len(teams)} teams for {league_code}")
+            return teams
 
     def _fetch_college_teams(self, sport: str, league: str) -> List[Dict]:
         """

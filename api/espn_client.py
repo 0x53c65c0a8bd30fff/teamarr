@@ -30,6 +30,26 @@ class ESPNClient:
         self._schedule_cache = {}
         self._schedule_cache_lock = threading.Lock()  # Thread-safe cache access
 
+        # Cache for team info (cleared each EPG generation run)
+        # Key: (sport, league, team_id), Value: team info data
+        self._team_info_cache = {}
+        self._team_info_cache_lock = threading.Lock()
+
+        # Cache for team rosters (cleared each EPG generation run)
+        # Key: (league, team_id), Value: roster data
+        self._roster_cache = {}
+        self._roster_cache_lock = threading.Lock()
+
+        # Cache for group names (cleared each EPG generation run)
+        # Key: (sport, league, group_id), Value: (name, abbreviation)
+        self._group_cache = {}
+        self._group_cache_lock = threading.Lock()
+
+        # Cache for scoreboard data (cleared each EPG generation run)
+        # Key: (sport, league, date), Value: scoreboard data
+        self._scoreboard_cache = {}
+        self._scoreboard_cache_lock = threading.Lock()
+
     def _make_request(self, url: str) -> Optional[Dict]:
         """Make HTTP request with retry logic"""
         for attempt in range(self.retry_count):
@@ -50,6 +70,9 @@ class ESPNClient:
         """
         Fetch group (conference or division) name and abbreviation from ESPN core API.
 
+        Results are cached per-generation to avoid redundant API calls.
+        Thread-safe via double-checked locking.
+
         Args:
             sport: Sport type (e.g., 'basketball', 'football')
             league: League identifier (e.g., 'nba', 'nfl')
@@ -58,19 +81,38 @@ class ESPNClient:
         Returns:
             tuple: (name, abbreviation) or ('', '') if not found
         """
-        try:
-            url = f"http://sports.core.api.espn.com/v2/sports/{sport}/leagues/{league}/groups/{group_id}"
-            group_data = self._make_request(url)
+        cache_key = (sport, league, str(group_id))
 
-            if group_data:
-                # Get both full name and abbreviation
-                name = group_data.get('shortName') or group_data.get('name', '')
-                abbrev = group_data.get('abbreviation', '')
-                return (name, abbrev)
-            return ('', '')
-        except Exception as e:
-            logger.error(f"Error fetching group name for ID {group_id}: {e}")
-            return ('', '')
+        # Fast path: check cache without lock
+        if cache_key in self._group_cache:
+            logger.debug(f"Group cache hit for {sport}/{league}/group/{group_id}")
+            return self._group_cache[cache_key]
+
+        # Slow path: acquire lock for cache miss
+        with self._group_cache_lock:
+            # Double-check after acquiring lock
+            if cache_key in self._group_cache:
+                logger.debug(f"Group cache hit (after lock) for {sport}/{league}/group/{group_id}")
+                return self._group_cache[cache_key]
+
+            try:
+                url = f"http://sports.core.api.espn.com/v2/sports/{sport}/leagues/{league}/groups/{group_id}"
+                group_data = self._make_request(url)
+
+                if group_data:
+                    # Get both full name and abbreviation
+                    name = group_data.get('shortName') or group_data.get('name', '')
+                    abbrev = group_data.get('abbreviation', '')
+                    result = (name, abbrev)
+                else:
+                    result = ('', '')
+            except Exception as e:
+                logger.error(f"Error fetching group name for ID {group_id}: {e}")
+                result = ('', '')
+
+            # Cache the result (even failures to avoid re-fetching)
+            self._group_cache[cache_key] = result
+            return result
 
     def _extract_record(self, record_list: List) -> Dict:
         """Extract win-loss record from competitor record array"""
@@ -155,9 +197,38 @@ class ESPNClient:
             self._schedule_cache.clear()
         logger.debug("Schedule cache cleared")
 
+    def clear_team_info_cache(self):
+        """Clear the team info cache. Call this at the start of each EPG generation."""
+        with self._team_info_cache_lock:
+            self._team_info_cache.clear()
+        logger.debug("Team info cache cleared")
+
+    def clear_roster_cache(self):
+        """Clear the roster cache. Call this at the start of each EPG generation."""
+        with self._roster_cache_lock:
+            self._roster_cache.clear()
+        logger.debug("Roster cache cleared")
+
+    def clear_group_cache(self):
+        """Clear the group name cache. Call this at the start of each EPG generation."""
+        with self._group_cache_lock:
+            self._group_cache.clear()
+        logger.debug("Group cache cleared")
+
+    def clear_scoreboard_cache(self):
+        """Clear the scoreboard cache. Call this at the start of each EPG generation."""
+        with self._scoreboard_cache_lock:
+            self._scoreboard_cache.clear()
+        logger.debug("Scoreboard cache cleared")
+
     def get_team_info(self, sport: str, league: str, team_id: str) -> Optional[Dict]:
         """
-        Fetch team information (name, logo, colors, etc.)
+        Fetch team information (name, logo, colors, etc.) with caching.
+
+        Team info is cached per-generation to avoid redundant API calls
+        when the same team is referenced multiple times (e.g., opponent lookups,
+        stats fetches that call get_team_info internally).
+        Thread-safe via double-checked locking.
 
         Args:
             sport: Sport type
@@ -167,8 +238,64 @@ class ESPNClient:
         Returns:
             Dict with team info or None if failed
         """
-        url = f"{self.base_url}/{sport}/{league}/teams/{team_id}"
-        return self._make_request(url)
+        cache_key = (sport, league, str(team_id))
+
+        # Fast path: check cache without lock
+        if cache_key in self._team_info_cache:
+            logger.debug(f"Team info cache hit for {sport}/{league}/{team_id}")
+            return self._team_info_cache[cache_key]
+
+        # Slow path: acquire lock for cache miss
+        with self._team_info_cache_lock:
+            # Double-check after acquiring lock (another thread may have populated)
+            if cache_key in self._team_info_cache:
+                logger.debug(f"Team info cache hit (after lock) for {sport}/{league}/{team_id}")
+                return self._team_info_cache[cache_key]
+
+            # Fetch from API
+            url = f"{self.base_url}/{sport}/{league}/teams/{team_id}"
+            result = self._make_request(url)
+
+            # Cache the result (even if None to avoid re-fetching failures)
+            self._team_info_cache[cache_key] = result
+            return result
+
+    def get_team_roster(self, league: str, team_id: str) -> Optional[Dict]:
+        """
+        Fetch team roster data with caching.
+
+        Roster data is cached per-generation to avoid redundant API calls
+        when the same team's roster is needed multiple times (e.g., coach lookups).
+        Thread-safe via double-checked locking.
+
+        Args:
+            league: League path (e.g., 'football/nfl', 'basketball/nba')
+            team_id: Team ID
+
+        Returns:
+            Dict with roster data or None if failed
+        """
+        cache_key = (league, str(team_id))
+
+        # Fast path: check cache without lock
+        if cache_key in self._roster_cache:
+            logger.debug(f"Roster cache hit for {league}/{team_id}")
+            return self._roster_cache[cache_key]
+
+        # Slow path: acquire lock for cache miss
+        with self._roster_cache_lock:
+            # Double-check after acquiring lock
+            if cache_key in self._roster_cache:
+                logger.debug(f"Roster cache hit (after lock) for {league}/{team_id}")
+                return self._roster_cache[cache_key]
+
+            # Fetch from API
+            url = f"{self.base_url}/{league}/teams/{team_id}/roster"
+            result = self._make_request(url)
+
+            # Cache the result (even if None to avoid re-fetching failures)
+            self._roster_cache[cache_key] = result
+            return result
 
     def get_team_record(self, sport: str, league: str, team_id: str) -> Optional[Dict]:
         """
@@ -429,7 +556,11 @@ class ESPNClient:
 
     def get_scoreboard(self, sport: str, league: str, date: str = None) -> Optional[Dict]:
         """
-        Fetch scoreboard for a specific date
+        Fetch scoreboard for a specific date with caching.
+
+        Scoreboard data is cached per-generation to avoid redundant API calls
+        during multi-sport disambiguation (same league/date checked many times).
+        Thread-safe via double-checked locking.
 
         Args:
             sport: Sport type
@@ -442,8 +573,27 @@ class ESPNClient:
         if date is None:
             date = datetime.now().strftime('%Y%m%d')
 
-        url = f"{self.base_url}/{sport}/{league}/scoreboard?dates={date}"
-        return self._make_request(url)
+        cache_key = (sport, league, date)
+
+        # Fast path: check cache without lock
+        if cache_key in self._scoreboard_cache:
+            logger.debug(f"Scoreboard cache hit for {sport}/{league}/{date}")
+            return self._scoreboard_cache[cache_key]
+
+        # Slow path: acquire lock for cache miss
+        with self._scoreboard_cache_lock:
+            # Double-check after acquiring lock
+            if cache_key in self._scoreboard_cache:
+                logger.debug(f"Scoreboard cache hit (after lock) for {sport}/{league}/{date}")
+                return self._scoreboard_cache[cache_key]
+
+            # Fetch from API
+            url = f"{self.base_url}/{sport}/{league}/scoreboard?dates={date}"
+            result = self._make_request(url)
+
+            # Cache the result (even if None to avoid re-fetching failures)
+            self._scoreboard_cache[cache_key] = result
+            return result
 
     def get_event_summary(self, sport: str, league: str, event_id: str) -> Optional[Dict]:
         """

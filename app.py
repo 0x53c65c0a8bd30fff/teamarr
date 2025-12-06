@@ -911,6 +911,10 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
 
         # Clear caches and reset counters for fresh generation
         epg_orchestrator.espn.clear_schedule_cache()
+        epg_orchestrator.espn.clear_team_info_cache()
+        epg_orchestrator.espn.clear_roster_cache()
+        epg_orchestrator.espn.clear_group_cache()
+        epg_orchestrator.espn.clear_scoreboard_cache()
         epg_orchestrator.api_calls = 0
 
         # ============================================
