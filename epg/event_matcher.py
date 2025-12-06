@@ -593,7 +593,7 @@ class EventMatcher:
                 elif b.get('name'):
                     event['broadcasts'].append(b.get('name'))
 
-            # Odds
+            # Odds - handle None entries in odds list (ESPN sometimes returns [None])
             odds = comp.get('odds', [])
             primary_odds = odds[0] if odds else None
             if primary_odds:
@@ -602,7 +602,7 @@ class EventMatcher:
                     'over_under': primary_odds.get('overUnder'),
                     'home_moneyline': primary_odds.get('homeTeamOdds', {}).get('moneyLine'),
                     'away_moneyline': primary_odds.get('awayTeamOdds', {}).get('moneyLine'),
-                    'provider': primary_odds.get('provider', {}).get('name')
+                    'provider': (primary_odds.get('provider') or {}).get('name')
                 }
 
             # Status
