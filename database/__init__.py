@@ -335,7 +335,7 @@ def get_league_alias(slug: str) -> str:
 #   16: Multi-sport event groups (is_multi_sport, enabled_leagues, etc.)
 # =============================================================================
 
-CURRENT_SCHEMA_VERSION = 18
+CURRENT_SCHEMA_VERSION = 19
 
 
 def get_schema_version(conn) -> int:
@@ -1410,6 +1410,43 @@ def run_migrations(conn):
 
         migrations_run += 1
         print("    ✅ Migration 18 complete: League codes normalized to ESPN slugs")
+
+    # =========================================================================
+    # 19. ADD WOMENS-COLLEGE-HOCKEY TO LEAGUE_CONFIG
+    # =========================================================================
+    if current_version < 19:
+        print("  🔄 Running migration 19: Add womens-college-hockey league")
+
+        # Add womens-college-hockey to league_config if not exists
+        try:
+            cursor.execute("""
+                INSERT OR IGNORE INTO league_config
+                (league_code, league_name, sport, api_path, default_category, record_format, logo_url)
+                VALUES
+                ('womens-college-hockey', 'NCAA Women''s Hockey', 'hockey', 'hockey/womens-college-hockey',
+                 'Hockey', 'wins-losses-ties', 'https://www.ncaa.com/modules/custom/casablanca_core/img/sportbanners/hockey.png')
+            """)
+            if cursor.rowcount > 0:
+                print("    ✅ Added womens-college-hockey to league_config")
+            else:
+                print("    ⏭️  womens-college-hockey already exists in league_config")
+        except Exception as e:
+            print(f"    ⚠️ Could not add womens-college-hockey to league_config: {e}")
+
+        # Add alias for womens-college-hockey
+        try:
+            cursor.execute("""
+                INSERT OR IGNORE INTO league_id_aliases (espn_slug, alias)
+                VALUES ('womens-college-hockey', 'ncaawh')
+            """)
+            if cursor.rowcount > 0:
+                print("    ✅ Added ncaawh alias for womens-college-hockey")
+        except Exception as e:
+            print(f"    ⚠️ Could not add ncaawh alias: {e}")
+
+        conn.commit()
+        migrations_run += 1
+        print("    ✅ Migration 19 complete: Added womens-college-hockey league")
 
     # =========================================================================
     # UPDATE SCHEMA VERSION

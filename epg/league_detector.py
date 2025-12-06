@@ -405,6 +405,7 @@ class DetectionResult:
     candidates_checked: List[str] = None  # Leagues that were considered
     event_id: Optional[str] = None  # ESPN event ID if schedule-matched
     event_date: Optional[datetime] = None  # Event date/time if matched
+    league_not_enabled: bool = False  # True if found in a league user hasn't enabled
 
     def __post_init__(self):
         if self.candidates_checked is None:
@@ -468,6 +469,49 @@ class LeagueDetector:
             for pattern, leagues in SPORT_INDICATORS.items()
         ]
 
+    def is_league_enabled(self, league: str) -> bool:
+        """Check if a league is in the enabled list for this detector."""
+        return league in self.enabled_leagues
+
+    def get_league_name(self, league_code: str) -> str:
+        """
+        Get the friendly name for a league code.
+
+        Looks up in league_config first, then soccer_leagues_cache.
+
+        Args:
+            league_code: ESPN league slug (e.g., 'womens-college-hockey', 'eng.1')
+
+        Returns:
+            Friendly league name or uppercase league code if not found
+        """
+        from database import get_connection
+
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+
+            # Try league_config first
+            cursor.execute("""
+                SELECT league_name FROM league_config WHERE league_code = ?
+            """, (league_code,))
+            row = cursor.fetchone()
+            if row:
+                return row[0]
+
+            # Try soccer_leagues_cache
+            cursor.execute("""
+                SELECT league_name FROM soccer_leagues_cache WHERE league_slug = ?
+            """, (league_code,))
+            row = cursor.fetchone()
+            if row:
+                return row[0]
+
+            # Fallback to uppercase code
+            return league_code.upper().replace('-', ' ')
+        finally:
+            conn.close()
+
     # ==========================================================================
     # PUBLIC API
     # ==========================================================================
@@ -515,6 +559,8 @@ class LeagueDetector:
             return result
 
         # Tier 3: Team-based lookup with schedule disambiguation
+        # NOTE: This now searches ALL leagues, not just enabled ones.
+        # The enabled check happens in the caller after a successful match.
         if team1 and team2:
             result = self._detect_tier3(
                 team1, team2,
@@ -524,15 +570,18 @@ class LeagueDetector:
             if result.detected:
                 return result
 
-        # No detection possible
+        # No detection possible - we searched ALL leagues
         return DetectionResult(
             detected=False,
-            method="No league detected - no indicators or team matches"
+            method="No league detected - teams not found in any league"
         )
 
     def find_candidate_leagues(self, team1: str, team2: str, include_soccer: bool = True) -> List[str]:
         """
-        Find all enabled leagues where both teams might exist.
+        Find ALL leagues where both teams might exist.
+
+        Searches all leagues regardless of enabled_leagues setting.
+        The enabled check happens AFTER a match is made.
 
         Uses TeamLeagueCache for non-soccer teams and SoccerMultiLeague for soccer.
 
@@ -542,14 +591,14 @@ class LeagueDetector:
             include_soccer: Whether to also check soccer leagues (default True)
 
         Returns:
-            List of league codes where both teams exist
+            List of league codes where both teams exist (ALL leagues, not filtered)
         """
         from epg.team_league_cache import TeamLeagueCache
 
-        # Get non-soccer leagues for these teams
+        # Get non-soccer leagues for these teams - NO enabled filter
         candidates = TeamLeagueCache.find_candidate_leagues(
             team1, team2,
-            enabled_leagues=self.enabled_leagues
+            enabled_leagues=None  # Search ALL leagues
         )
 
         # Also check soccer leagues if enabled
@@ -570,14 +619,17 @@ class LeagueDetector:
         team2_id: str
     ) -> List[str]:
         """
-        Find all enabled leagues where both team IDs exist.
+        Find ALL leagues where both team IDs exist.
+
+        Searches all leagues regardless of enabled_leagues setting.
+        The enabled check happens AFTER a match is made.
 
         Args:
             team1_id: ESPN team ID for first team
             team2_id: ESPN team ID for second team
 
         Returns:
-            List of league codes where both teams exist
+            List of league codes where both teams exist (ALL leagues, not filtered)
         """
         from database import get_connection
 
@@ -614,10 +666,9 @@ class LeagueDetector:
             """, (str(team2_id),))
             leagues2.update(row[0] for row in cursor.fetchall())
 
-            # Intersection filtered by enabled leagues
+            # Intersection - NO enabled filter, search all leagues
             candidates = leagues1 & leagues2
-            if self.enabled_leagues:
-                candidates = candidates & set(self.enabled_leagues)
+            # Enabled check happens AFTER match is made, not here
 
             return list(candidates)
 
@@ -1199,15 +1250,17 @@ class LeagueDetector:
         Tier 1: Detect league from explicit league indicator in stream name.
 
         Example: "NHL: Predators vs Panthers" → NHL
+
+        Note: Does NOT filter by enabled_leagues - the enabled check happens
+        in the caller after a successful match.
         """
         detected_league = None
 
         for pattern, league in self._league_patterns:
             if pattern.search(stream_name):
-                # Check if this league is enabled
-                if league in self.enabled_leagues:
-                    detected_league = league
-                    break
+                # Found a league indicator - use it (don't filter by enabled)
+                detected_league = league
+                break
 
         if not detected_league:
             return DetectionResult(detected=False)
@@ -1252,6 +1305,9 @@ class LeagueDetector:
         Tier 2: Detect league from sport indicator + team lookup.
 
         Example: "Hockey: Predators vs Panthers" + teams in NHL → NHL
+
+        Note: Does NOT filter by enabled_leagues - the enabled check happens
+        in the caller after a successful match.
         """
         detected_sport = None
         sport_leagues = []
@@ -1259,7 +1315,8 @@ class LeagueDetector:
         for pattern, leagues in self._sport_patterns:
             if pattern.search(stream_name):
                 detected_sport = pattern.pattern.strip(r'\b')
-                sport_leagues = [l for l in leagues if l in self.enabled_leagues]
+                # Don't filter by enabled - search all leagues for this sport
+                sport_leagues = leagues
                 break
 
         if not sport_leagues:

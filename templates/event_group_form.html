@@ -1228,34 +1228,36 @@ document.getElementById('event-group-form').addEventListener('submit', async fun
 
 // League definitions for the picker
 // Sorted alphabetically by sport name
+// League values use ESPN API slugs for consistency with database storage
+// The database normalizes all league codes to these slugs via normalize_league_codes()
 const multiSportLeagues = {
     'baseball': [
         { value: 'mlb', label: 'MLB' },
     ],
     'basketball': [
         { value: 'nba', label: 'NBA' },
-        { value: 'nba-g', label: 'NBA G-League' },
+        { value: 'nba-development', label: 'NBA G-League' },
         { value: 'wnba', label: 'WNBA' },
-        { value: 'ncaam', label: 'NCAA Men\'s Basketball' },
-        { value: 'ncaaw', label: 'NCAA Women\'s Basketball' },
+        { value: 'mens-college-basketball', label: 'NCAA Men\'s Basketball' },
+        { value: 'womens-college-basketball', label: 'NCAA Women\'s Basketball' },
     ],
     'football': [
         { value: 'nfl', label: 'NFL' },
-        { value: 'ncaaf', label: 'NCAA Football' },
+        { value: 'college-football', label: 'NCAA Football' },
     ],
     'hockey': [
         { value: 'nhl', label: 'NHL' },
-        { value: 'ncaah', label: 'NCAA Men\'s Hockey' },
-        { value: 'ncaawh', label: 'NCAA Women\'s Hockey' },
+        { value: 'mens-college-hockey', label: 'NCAA Men\'s Hockey' },
+        { value: 'womens-college-hockey', label: 'NCAA Women\'s Hockey' },
     ],
     'soccer': [
-        { value: 'ncaas', label: 'NCAA Men\'s Soccer' },
-        { value: 'ncaaws', label: 'NCAA Women\'s Soccer' },
+        { value: 'usa.ncaa.m.1', label: 'NCAA Men\'s Soccer' },
+        { value: 'usa.ncaa.w.1', label: 'NCAA Women\'s Soccer' },
         { value: 'soccer_all', label: 'Professional Soccer (All)' },
     ],
     'volleyball': [
-        { value: 'ncaavb', label: 'NCAA Men\'s Volleyball' },
-        { value: 'ncaawvb', label: 'NCAA Women\'s Volleyball' },
+        { value: 'mens-college-volleyball', label: 'NCAA Men\'s Volleyball' },
+        { value: 'womens-college-volleyball', label: 'NCAA Women\'s Volleyball' },
     ],
 };
 

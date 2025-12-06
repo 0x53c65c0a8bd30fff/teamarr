@@ -80,6 +80,13 @@ class FilterReason:
     # Boxing/MMA detected (main card, undercard, prelims) - not supported
     UNSUPPORTED_BOXING_MMA = 'unsupported_boxing_mma'
 
+    # =========================================================================
+    # Configuration Mismatch Reasons
+    # =========================================================================
+
+    # Event found in a league that user hasn't enabled for this group
+    LEAGUE_NOT_ENABLED = 'league_not_enabled'
+
 
 # Display text for user-facing UI (preview modal, etc.)
 DISPLAY_TEXT = {
@@ -95,6 +102,7 @@ DISPLAY_TEXT = {
     FilterReason.NO_COMMON_LEAGUE: 'No common league for teams',
     FilterReason.UNSUPPORTED_BEACH_SOCCER: 'Unsupported (Beach Soccer)',
     FilterReason.UNSUPPORTED_BOXING_MMA: 'Unsupported (Boxing/MMA)',
+    FilterReason.LEAGUE_NOT_ENABLED: 'League not enabled',
 }
 
 # Internal reasons (used by event_matcher.py for backwards compatibility)
@@ -113,13 +121,14 @@ INTERNAL_TO_DISPLAY = {
 }
 
 
-def get_display_text(reason: str, lookahead_days: int = None) -> str:
+def get_display_text(reason: str, lookahead_days: int = None, league_name: str = None) -> str:
     """
     Get user-friendly display text for a filter reason.
 
     Args:
         reason: The filter reason constant or internal reason string
         lookahead_days: Optional lookahead days for NO_GAME_FOUND reason
+        league_name: Optional league name for LEAGUE_NOT_ENABLED reason
 
     Returns:
         Human-readable display text
@@ -129,6 +138,8 @@ def get_display_text(reason: str, lookahead_days: int = None) -> str:
         text = DISPLAY_TEXT[reason]
         if reason == FilterReason.NO_GAME_FOUND and lookahead_days:
             return f'No event in lookahead range ({lookahead_days} days)'
+        if reason == FilterReason.LEAGUE_NOT_ENABLED and league_name:
+            return f'Found in {league_name} (not enabled)'
         return text
 
     # Check if it's an internal reason string (backwards compatibility)
@@ -158,7 +169,7 @@ def is_excluded_from_count(reason: str) -> bool:
 
     Streams that match this criteria are not "failures to match" - they're
     streams where matching isn't applicable (past games, finals when excluded,
-    or no event found in the lookahead window).
+    no event in lookahead, or event in a non-enabled league).
 
     Args:
         reason: Filter reason constant or internal reason string
@@ -171,6 +182,7 @@ def is_excluded_from_count(reason: str) -> bool:
         FilterReason.GAME_PAST,
         FilterReason.GAME_FINAL_EXCLUDED,
         FilterReason.NO_GAME_FOUND,  # No event in lookahead range
+        FilterReason.LEAGUE_NOT_ENABLED,  # Event in non-enabled league
     )
 
 

@@ -498,7 +498,18 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
 
             if not result.matched:
                 # Determine result type based on reason
-                if result.reason == 'NO_LEAGUE_DETECTED':
+                if result.league_not_enabled:
+                    # Found in a non-enabled league - log and exclude from match rate
+                    app.logger.debug(
+                        f"Stream '{stream.get('name', '')[:50]}' found in non-enabled league: {result.league_name}"
+                    )
+                    return {
+                        'type': 'filtered',
+                        'reason': FilterReason.LEAGUE_NOT_ENABLED,
+                        'stream': stream,
+                        'league_name': result.league_name
+                    }
+                elif result.reason == 'NO_LEAGUE_DETECTED':
                     return {'type': 'filtered', 'reason': 'NO_LEAGUE_DETECTED', 'stream': stream}
                 elif result.parsed_teams:
                     return {
@@ -4455,11 +4466,16 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                                     'event_result': event_result
                                 }
 
-                            return {
+                            # Include league_not_enabled info if present
+                            return_dict = {
                                 'stream': stream,
                                 'team_result': team_result,
                                 'event_result': None
                             }
+                            if result.league_not_enabled:
+                                return_dict['league_not_enabled'] = True
+                                return_dict['league_name'] = result.league_name
+                            return return_dict
 
                     # Select the appropriate matcher
                     match_func = match_single_stream_multi if is_multi_sport else match_single_stream_single
@@ -4491,8 +4507,13 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                             team_result = match_data.get('team_result', {})
                             event_result = match_data.get('event_result')
                             # Convert FilterReason constants to display text for team_match
+                            # Include league_name for LEAGUE_NOT_ENABLED reason
                             if team_result.get('reason'):
-                                team_result['reason'] = get_display_text(team_result['reason'])
+                                league_name = match_data.get('league_name')
+                                team_result['reason'] = get_display_text(
+                                    team_result['reason'],
+                                    league_name=league_name
+                                )
                             stream['team_match'] = team_result
 
                             if event_result:

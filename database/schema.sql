@@ -263,7 +263,7 @@ CREATE TABLE IF NOT EXISTS settings (
     team_cache_refresh_frequency TEXT DEFAULT 'weekly',    -- daily, every_3_days, weekly, manual
 
     -- Schema versioning for migrations
-    schema_version INTEGER DEFAULT 16,  -- Current schema version (increment with each migration)
+    schema_version INTEGER DEFAULT 19,  -- Current schema version (increment with each migration)
 
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -486,6 +486,7 @@ INSERT OR IGNORE INTO league_config (league_code, league_name, sport, api_path, 
     ('mens-college-basketball', 'NCAA Men''s Basketball', 'basketball', 'basketball/mens-college-basketball', 'College Basketball', 'wins-losses', 'https://www.ncaa.com/modules/custom/casablanca_core/img/sportbanners/basketball.png'),
     ('womens-college-basketball', 'NCAA Women''s Basketball', 'basketball', 'basketball/womens-college-basketball', 'College Basketball', 'wins-losses', 'https://www.ncaa.com/modules/custom/casablanca_core/img/sportbanners/basketball.png'),
     ('mens-college-hockey', 'NCAA Men''s Hockey', 'hockey', 'hockey/mens-college-hockey', 'Hockey', 'wins-losses-ties', 'https://www.ncaa.com/modules/custom/casablanca_core/img/sportbanners/hockey.png'),
+    ('womens-college-hockey', 'NCAA Women''s Hockey', 'hockey', 'hockey/womens-college-hockey', 'Hockey', 'wins-losses-ties', 'https://www.ncaa.com/modules/custom/casablanca_core/img/sportbanners/hockey.png'),
     ('mens-college-volleyball', 'NCAA Men''s Volleyball', 'volleyball', 'volleyball/mens-college-volleyball', 'Volleyball', 'wins-losses', 'https://www.ncaa.com/modules/custom/casablanca_core/img/sportbanners/volleyball.png'),
     ('womens-college-volleyball', 'NCAA Women''s Volleyball', 'volleyball', 'volleyball/womens-college-volleyball', 'Volleyball', 'wins-losses', 'https://www.ncaa.com/modules/custom/casablanca_core/img/sportbanners/volleyball.png'),
     -- Soccer (league_code uses ESPN slug)
@@ -535,6 +536,7 @@ INSERT OR IGNORE INTO league_id_aliases (espn_slug, alias) VALUES
     ('womens-college-basketball', 'ncaaw'),
     ('college-football', 'ncaaf'),
     ('mens-college-hockey', 'ncaah'),
+    ('womens-college-hockey', 'ncaawh'),
     ('nba-development', 'nbag'),
     ('mens-college-volleyball', 'ncaavbm'),
     ('womens-college-volleyball', 'ncaavbw'),

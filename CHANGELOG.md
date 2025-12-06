@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **LeagueDetector module** (`epg/league_detector.py`) orchestrates detection
 - **TeamLeagueCache** (`epg/team_league_cache.py`) provides team→league reverse lookups
 - **Detection tier logging** for debugging: `[TIER 3a] stream → LEAGUE`
+- **Non-enabled league detection** - When teams are found in a league not enabled for the group,
+  displays helpful message like "Found in NCAA Women's Hockey (not enabled)" instead of generic
+  "teams not found" error. Excluded from match rate calculation.
 
 #### Advanced Team Matching
 - **Tiered name normalization** in TeamMatcher:

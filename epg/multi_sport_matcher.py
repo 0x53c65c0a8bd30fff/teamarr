@@ -44,6 +44,10 @@ class MatchResult:
     detail: Optional[str] = None
     parsed_teams: Optional[Dict] = None
 
+    # League not enabled (found in a league user hasn't enabled for this group)
+    league_not_enabled: bool = False
+    league_name: Optional[str] = None  # Friendly name for display
+
     # Error info (when error=True)
     error_message: Optional[str] = None
 
@@ -164,9 +168,8 @@ class MultiSportMatcher:
             pre_found_event = None  # Event found during disambiguation (optimization)
 
             # Step 2: Tier 1 - If league indicator found, try that league directly
-            if indicator_league and indicator_league in (
-                self.config.enabled_leagues + (['soccer'] if self.config.soccer_enabled else [])
-            ):
+            # Note: Don't filter by enabled - we search ALL leagues, check enabled after match
+            if indicator_league:
                 team_result = self._extract_teams(stream_name, indicator_league)
                 if team_result.get('matched'):
                     detected_league = indicator_league
@@ -337,12 +340,27 @@ class MultiSportMatcher:
                 event_result = {'found': False, 'reason': 'Disambiguation returned None'}
 
             if event_result.get('found'):
-                # Success!
+                # Match successful! Now check if league is enabled for this group
                 team_result['detected_league'] = detected_league
 
                 if detection_tier:
                     logger.debug(f"[TIER {detection_tier}] {stream_name[:50]}... → {detected_league.upper()}")
 
+                # Check if detected league is enabled
+                if not self.league_detector.is_league_enabled(detected_league):
+                    # League not enabled - return helpful message
+                    from utils.filter_reasons import FilterReason
+                    league_name = self.league_detector.get_league_name(detected_league)
+                    result.reason = FilterReason.LEAGUE_NOT_ENABLED
+                    result.detected_league = detected_league
+                    result.league_not_enabled = True
+                    result.league_name = league_name
+                    result.parsed_teams = {'team1': raw_team1, 'team2': raw_team2}
+                    result.detail = f"Found in {league_name} (not enabled for this group)"
+                    logger.info(f"Match found in non-enabled league: {stream_name[:50]}... → {league_name}")
+                    return result
+
+                # League is enabled - full success!
                 result.matched = True
                 result.team_result = team_result
                 result.event = event_result['event']
@@ -381,17 +399,23 @@ class MultiSportMatcher:
     def _try_sport_leagues(
         self, stream_name: str, indicator_sport: str, raw_team1: str, raw_team2: str
     ) -> tuple:
-        """Tier 2: Try leagues within the indicated sport."""
-        from epg.league_detector import get_sport_for_league
+        """
+        Tier 2: Try leagues within the indicated sport.
+
+        Note: Searches ALL leagues for the sport, not just enabled ones.
+        The enabled check happens after a successful match is made.
+        """
+        from epg.league_detector import get_sport_for_league, LEAGUE_TO_SPORT
         from database import get_soccer_slug_mapping
 
-        if indicator_sport == 'soccer' and self.config.soccer_enabled:
+        if indicator_sport == 'soccer':
             # Soccer uses dedicated SoccerMultiLeague cache (240+ leagues)
             soccer_slugs = self.league_detector._find_soccer_leagues_for_teams(raw_team1, raw_team2)
             slug_to_code = get_soccer_slug_mapping()
             sport_leagues = [slug_to_code.get(slug) for slug in soccer_slugs[:10] if slug in slug_to_code]
         else:
-            sport_leagues = [l for l in self.config.enabled_leagues
+            # Search ALL leagues for this sport, not just enabled ones
+            sport_leagues = [l for l in LEAGUE_TO_SPORT.keys()
                            if get_sport_for_league(l) == indicator_sport]
 
         for league in sport_leagues:
@@ -408,22 +432,25 @@ class MultiSportMatcher:
         """
         Tier 3: Use caches to find candidate leagues from team names.
 
+        Note: Searches ALL leagues, not just enabled ones.
+        The enabled check happens after a successful match is made.
+
         Returns:
             Tuple of (detected_league, team_result, api_override, detection_tier, found_event)
             - found_event: Event dict if found during disambiguation, None otherwise
         """
         # Find candidate leagues from TeamLeagueCache (non-soccer)
+        # This now returns ALL leagues where both teams exist (no enabled filter)
         candidate_leagues = self.league_detector.find_candidate_leagues(
             raw_team1, raw_team2, include_soccer=False
         )
-        # Filter to enabled leagues
-        candidate_leagues = [l for l in candidate_leagues if l in self.config.enabled_leagues]
+        # DO NOT filter by enabled - we search ALL leagues, check enabled after match
 
         # Collect all matched candidates for disambiguation
         matched_candidates = []
 
-        # Also check soccer cache if enabled
-        if self.config.soccer_enabled:
+        # Also check soccer cache (no longer filtered by soccer_enabled)
+        if True:  # Always check soccer, enabled check happens after match
             from database import get_soccer_slug_mapping
             soccer_candidates = self.league_detector.get_soccer_candidates_with_team_ids(raw_team1, raw_team2)
             for sc in soccer_candidates:
