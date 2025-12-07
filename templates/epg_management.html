@@ -77,6 +77,13 @@
                 {% if latest_epg.generation_time_seconds %}
                 <span class="generation-duration">({{ "%.1f"|format(latest_epg.generation_time_seconds) }}s)</span>
                 {% endif %}
+                {% if latest_epg.triggered_by == 'scheduler' %}
+                <span class="trigger-badge trigger-scheduler" title="Triggered by scheduler">⏰ Scheduled</span>
+                {% elif latest_epg.triggered_by == 'api' %}
+                <span class="trigger-badge trigger-api" title="Triggered by API">🔌 API</span>
+                {% else %}
+                <span class="trigger-badge trigger-manual" title="Triggered manually">👆 Manual</span>
+                {% endif %}
             </div>
             <div class="generation-stats">
                 <span class="stat-item" title="Team-based channels">
@@ -895,15 +902,15 @@ mark.current-match {
     font-size: 0.8125rem;
 }
 
-.generation-trigger {
+.trigger-badge {
     padding: 0.125rem 0.5rem;
     border-radius: 3px;
     font-size: 0.6875rem;
     font-weight: 600;
-    text-transform: uppercase;
+    margin-left: 0.5rem;
 }
 
-.trigger-scheduled {
+.trigger-scheduler {
     background: rgba(59, 130, 246, 0.15);
     color: #60a5fa;
 }
@@ -911,6 +918,11 @@ mark.current-match {
 .trigger-manual {
     background: rgba(168, 85, 247, 0.15);
     color: #c084fc;
+}
+
+.trigger-api {
+    background: rgba(34, 197, 94, 0.15);
+    color: #4ade80;
 }
 
 .generation-stats {

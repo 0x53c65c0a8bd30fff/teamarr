@@ -1061,9 +1061,16 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
         }
 
 
-def generate_all_epg(progress_callback=None, settings=None, save_history=True, team_progress_callback=None):
+def generate_all_epg(progress_callback=None, settings=None, save_history=True, team_progress_callback=None, triggered_by='manual'):
     """
     AUTHORITATIVE EPG generation function - single source of truth for ALL EPG generation.
+
+    Args:
+        progress_callback: Optional callback for progress updates
+        settings: Optional settings dict (fetched if not provided)
+        save_history: Whether to save generation stats to epg_history table
+        team_progress_callback: Optional callback for team-level progress
+        triggered_by: What triggered this generation ('manual', 'scheduler', 'api')
 
     This function handles the complete EPG pipeline:
     1. Generates team-based EPG → saves to teams.xml
@@ -1541,7 +1548,9 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
                 # Quality stats (not tracked here, defaults to 0)
                 'unresolved_vars_count': 0,
                 'coverage_gaps_count': 0,
-                'warnings_json': '[]'
+                'warnings_json': '[]',
+                # Trigger source
+                'triggered_by': triggered_by
             })
             app.logger.info(f"📊 EPG history saved: {total_programmes} programmes, {total_channels} channels in {generation_time:.2f}s")
 
@@ -1665,7 +1674,8 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
                     'num_channels': 0,
                     'num_events': 0,
                     'num_programmes': 0,
-                    'warnings_json': f'["{str(e)}"]'
+                    'warnings_json': f'["{str(e)}"]',
+                    'triggered_by': triggered_by
                 })
             except Exception as hist_err:
                 app.logger.warning(f"Failed to save error to history: {hist_err}")
@@ -1685,7 +1695,7 @@ def run_scheduled_generation():
         app.logger.info(f"🕐 Scheduled EPG generation started at {datetime.now()}")
 
         with app.app_context():
-            result = generate_all_epg()
+            result = generate_all_epg(triggered_by='scheduler')
 
             if result.get('success'):
                 team_stats = result.get('team_stats', {})
@@ -3054,7 +3064,7 @@ def generate_epg():
 
     # For JSON API clients, run synchronously and return result
     if request.accept_mimetypes.accept_json and not request.accept_mimetypes.accept_html:
-        result = generate_all_epg()
+        result = generate_all_epg(triggered_by='api')
 
         if result.get('success'):
             return jsonify({

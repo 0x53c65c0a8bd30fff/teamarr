@@ -1657,9 +1657,14 @@ def run_migrations(conn):
                 ON epg_matched_streams(group_id)
             """)
 
+            # Add triggered_by column to epg_history
+            add_columns_if_missing('epg_history', [
+                ('triggered_by', "TEXT DEFAULT 'manual'"),  # 'manual', 'scheduler', 'api'
+            ])
+
             conn.commit()
             migrations_run += 1
-            print("    ✅ Migration 24 complete: EPG match tracking tables created")
+            print("    ✅ Migration 24 complete: EPG match tracking tables + triggered_by column")
         except Exception as e:
             print(f"    ⚠️ Migration 24 error: {e}")
             conn.rollback()
@@ -3198,7 +3203,7 @@ def save_epg_generation_stats(stats: Dict[str, Any]) -> int:
             INSERT INTO epg_history (
                 file_path, file_size, file_hash,
                 generation_time_seconds, api_calls_made,
-                status, error_message,
+                status, error_message, triggered_by,
                 num_channels, num_programmes, num_events,
                 num_pregame, num_postgame, num_idle,
                 team_based_channels, team_based_events,
@@ -3212,7 +3217,7 @@ def save_epg_generation_stats(stats: Dict[str, Any]) -> int:
                 event_filtered_unsupported_sport,
                 event_eligible_streams, event_matched_streams,
                 unresolved_vars_count, coverage_gaps_count, warnings_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             stats.get('file_path', ''),
             stats.get('file_size', 0),
@@ -3221,6 +3226,7 @@ def save_epg_generation_stats(stats: Dict[str, Any]) -> int:
             stats.get('api_calls_made', 0),
             stats.get('status', 'success'),
             stats.get('error_message'),
+            stats.get('triggered_by', 'manual'),  # 'manual', 'scheduler', 'api'
             # Legacy totals
             stats.get('num_channels', 0),
             stats.get('num_programmes', 0),
