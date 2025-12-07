@@ -511,6 +511,9 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                     }
                 elif result.reason == 'NO_LEAGUE_DETECTED':
                     return {'type': 'filtered', 'reason': 'NO_LEAGUE_DETECTED', 'stream': stream}
+                elif result.reason in (FilterReason.UNSUPPORTED_BEACH_SOCCER, FilterReason.UNSUPPORTED_BOXING_MMA, FilterReason.UNSUPPORTED_FUTSAL):
+                    # Unsupported sport - return as filtered so it's excluded from match rate
+                    return {'type': 'filtered', 'reason': result.reason, 'stream': stream}
                 elif result.parsed_teams:
                     return {
                         'type': 'no_teams',
