@@ -624,6 +624,12 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                 event_id = event.get('id')
                 detected_league = result.get('detected_league') or group.get('assigned_league', '')
 
+                # Debug: Log cache store decision
+                if not event_id:
+                    app.logger.debug(f"[CACHE SKIP] No event_id for stream: {stream_name[:50]}")
+                elif not detected_league:
+                    app.logger.debug(f"[CACHE SKIP] No detected_league for stream: {stream_name[:50]}, event_id={event_id}")
+
                 if event_id and detected_league:
                     # Build cached data structure
                     cached_data = {
@@ -635,6 +641,7 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                         event_id, detected_league, cached_data, generation
                     )
                     cache_stats['stored'] += 1
+                    app.logger.debug(f"[CACHE STORED] {stream_name[:50]} -> {event_id} ({detected_league})")
 
             return result
 
@@ -1230,7 +1237,7 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
                         stream_name = kwargs.get('stream_name', '')
                         stream_status = kwargs.get('stream_status', '')
                         if stream_name:
-                            message = f"{group_name}: {stream_name} {stream_status}"
+                            message = f"{group_name}: {stream_name} {stream_status} ({processed_streams}/{total_streams})"
                         else:
                             message = f"Processing {group_name}: {processed_streams}/{total_streams} streams"
 
@@ -4382,6 +4389,13 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                     from epg.team_matcher import create_matcher
                     from epg.event_matcher import create_event_matcher
                     from utils.stream_filter import has_game_indicator
+                    from epg.stream_match_cache import StreamMatchCache, refresh_cached_event, get_generation_counter
+
+                    # Initialize fingerprint cache for test modal
+                    # Test modal reads from cache (benefits from EPG runs) and writes with current generation
+                    stream_cache = StreamMatchCache(get_connection)
+                    current_generation = get_generation_counter(get_connection)
+                    internal_group_id = db_group.get('id') if db_group else 0
 
                     # Fetch settings
                     conn = get_connection()
@@ -4428,6 +4442,7 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
 
                         try:
                             stream_name = stream['name']
+                            stream_id = stream.get('id', 0)
 
                             # Check if stream is filtered/excluded
                             if not skip_builtin_filter and not has_game_indicator(stream_name):
@@ -4448,6 +4463,31 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                                     'filtered': True,
                                     'filter_reason': get_display_text(FilterReason.EXCLUDE_REGEX_MATCHED)
                                 }
+
+                            # Check fingerprint cache first
+                            cached = stream_cache.get(internal_group_id, stream_id, stream_name)
+                            if cached:
+                                event_id, cached_league, cached_data = cached
+                                # Refresh dynamic fields from ESPN
+                                refreshed = refresh_cached_event(
+                                    thread_event_matcher.espn,
+                                    cached_data,
+                                    cached_league,
+                                    get_connection
+                                )
+                                if refreshed:
+                                    # Touch cache to update last_seen_generation
+                                    stream_cache.touch(internal_group_id, stream_id, stream_name, current_generation)
+                                    return {
+                                        'stream': stream,
+                                        'team_result': refreshed.get('team_result', {}),
+                                        'event_result': {
+                                            'found': True,
+                                            'event': refreshed.get('event'),
+                                            'event_id': event_id
+                                        },
+                                        'from_cache': True
+                                    }
 
                             # Extract teams - use custom regex if configured (same logic as refresh_event_group_core)
                             if any_custom_enabled:
@@ -4516,6 +4556,20 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                                             if event_result.get('found'):
                                                 break
 
+                                # Cache successful match for future EPG runs
+                                if event_result.get('found') and event_result.get('event'):
+                                    event = event_result['event']
+                                    event_id = event.get('id')
+                                    if event_id:
+                                        cached_data = {
+                                            'event': event,
+                                            'team_result': team_result
+                                        }
+                                        stream_cache.set(
+                                            internal_group_id, stream_id, stream_name,
+                                            event_id, league, cached_data, current_generation
+                                        )
+
                                 return {
                                     'stream': stream,
                                     'team_result': team_result,
@@ -4568,6 +4622,35 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                                 'filter_reason': get_display_text(FilterReason.EXCLUDE_REGEX_MATCHED)
                             }
 
+                        stream_id = stream.get('id', 0)
+
+                        # Check fingerprint cache first
+                        cached = stream_cache.get(internal_group_id, stream_id, stream_name)
+                        if cached:
+                            # Create minimal matcher just for ESPN client access
+                            thread_event_matcher = create_event_matcher(lookahead_days=lookahead_days)
+                            event_id, cached_league, cached_data = cached
+                            # Refresh dynamic fields from ESPN
+                            refreshed = refresh_cached_event(
+                                thread_event_matcher.espn,
+                                cached_data,
+                                cached_league,
+                                get_connection
+                            )
+                            if refreshed:
+                                # Touch cache to update last_seen_generation
+                                stream_cache.touch(internal_group_id, stream_id, stream_name, current_generation)
+                                return {
+                                    'stream': stream,
+                                    'team_result': refreshed.get('team_result', {}),
+                                    'event_result': {
+                                        'found': True,
+                                        'event': refreshed.get('event'),
+                                        'event_id': event_id
+                                    },
+                                    'from_cache': True
+                                }
+
                         # Create per-thread instances
                         thread_team_matcher = create_matcher()
                         thread_event_matcher = create_event_matcher(lookahead_days=lookahead_days)
@@ -4611,6 +4694,20 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                                 'event': result.event,
                                 'event_id': result.event.get('id') if result.event else None
                             }
+
+                            # Cache successful match for future EPG runs
+                            if result.event and result.event.get('id'):
+                                event_id = result.event.get('id')
+                                detected_league = result.league or ''
+                                cached_data = {
+                                    'event': result.event,
+                                    'team_result': result.team_result
+                                }
+                                stream_cache.set(
+                                    internal_group_id, stream_id, stream_name,
+                                    event_id, detected_league, cached_data, current_generation
+                                )
+
                             return {
                                 'stream': stream,
                                 'team_result': result.team_result,
