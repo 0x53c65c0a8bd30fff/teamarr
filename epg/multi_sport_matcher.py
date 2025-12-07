@@ -574,7 +574,7 @@ class MultiSportMatcher:
                         user_tz_str = get_user_timezone(get_connection)
                         user_tz = ZoneInfo(user_tz_str)
 
-                        # target_time is a time object parsed from stream (assumed user's timezone)
+                        # target_time may be a datetime or time object - extract time() if needed
                         # Build a full datetime using game_date or today, with user's timezone
                         target_date = candidate.get('game_date')
                         if target_date is None:
@@ -582,9 +582,16 @@ class MultiSportMatcher:
                         elif hasattr(target_date, 'date'):
                             target_date = target_date.date()
 
+                        # Ensure we have a time object for combine()
+                        if hasattr(target_time, 'time'):
+                            # It's a datetime, extract the time component
+                            target_time_obj = target_time.time()
+                        else:
+                            target_time_obj = target_time
+
                         # Create target datetime in user's timezone
                         target_dt = datetime.combine(
-                            target_date, target_time, tzinfo=user_tz
+                            target_date, target_time_obj, tzinfo=user_tz
                         )
 
                         # Convert both to UTC for comparison
