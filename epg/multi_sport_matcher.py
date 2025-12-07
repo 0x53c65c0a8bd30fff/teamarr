@@ -421,7 +421,16 @@ class MultiSportMatcher:
                 result.team_result = team_result  # Include team info for UI
                 result.parsed_teams = {'team1': raw_team1, 'team2': raw_team2}
                 result.detected_league = detected_league
-                logger.info(f"[UNMATCHED] {stream_name[:60]}... | reason={result.reason} | league={detected_league}")
+
+                # Log differently based on reason - GAME_PAST/GAME_FINAL means we DID match, just excluded
+                from utils.filter_reasons import FilterReason
+                if result.reason in (FilterReason.GAME_PAST, FilterReason.GAME_FINAL_EXCLUDED):
+                    # We matched the event but excluded it due to timing
+                    tier_str = f"TIER {detection_tier}" if detection_tier else "MATCHED"
+                    logger.info(f"[{tier_str}] {stream_name[:50]}... → {detected_league.upper()} | [EXCLUDED] {result.reason}")
+                else:
+                    # True unmatched - couldn't find the event
+                    logger.info(f"[UNMATCHED] {stream_name[:60]}... | reason={result.reason} | league={detected_league}")
                 return result
 
         except Exception as e:
