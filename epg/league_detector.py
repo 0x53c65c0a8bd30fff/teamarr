@@ -7,15 +7,18 @@ Uses a tiered detection system with fallback strategies.
 Detection Tiers:
     Tier 1: League indicator + Teams → Direct match (e.g., "NHL: Predators vs Panthers")
     Tier 2: Sport indicator + Teams → Match within sport's leagues
-    Tier 3a: Both teams in cache + Date + Time → Exact schedule match across candidate leagues
-    Tier 3b: Both teams in cache + Time only → Infer today's date, exact schedule match
-    Tier 3c: Both teams in cache only → Closest game to now across candidate leagues
-    Tier 4a: One team in cache + Date/Time → Search schedule for opponent by name, exact time match
-    Tier 4b: One team in cache only → Search schedule for opponent by name, closest game
+    Tier 3a: Both teams in cache + Date + Time + GAME FOUND → Exact schedule match
+    Tier 3b: Both teams in cache + Time only + GAME FOUND → Infer today, schedule match
+    Tier 3c: Both teams in cache + GAME FOUND → Closest game to now
+    Tier 4a: Both teams in cache but NO GAME between them → Search schedules for RAW opponent name
+    Tier 4b: One team in cache + Date/Time → Search schedule for opponent by name, exact time
+    Tier 4c: One team in cache only → Search schedule for opponent by name, closest game
 
-Tier 4 handles cases where one team isn't in ESPN's team database (e.g., NAIA teams
-playing NCAA teams). It searches the known team's schedule and matches opponent by
-name string rather than team ID.
+Tier 4 handles two cases:
+1. Both teams "matched" but to WRONG teams (e.g., "IU East" → "IU Indianapolis"), so no game
+   exists between them. Tier 4a searches all schedules for the RAW opponent name string.
+2. Only one team is in ESPN's database (e.g., NAIA vs NCAA). Tier 4b/4c searches the known
+   team's schedule for the unknown opponent by name string.
 
 Usage:
     from epg.league_detector import LeagueDetector, DetectionResult
@@ -549,12 +552,12 @@ class LeagueDetector:
             DetectionResult with league, tier, and method details
         """
         # Tier 1: Check for explicit league indicator
-        result = self._detect_tier1(stream_name, team1, team2)
+        result = self._detect_tier1(stream_name, team1, team2, game_date, game_time)
         if result.detected:
             return result
 
         # Tier 2: Check for sport indicator
-        result = self._detect_tier2(stream_name, team1, team2)
+        result = self._detect_tier2(stream_name, team1, team2, game_date, game_time)
         if result.detected:
             return result
 
@@ -807,6 +810,9 @@ class LeagueDetector:
                     # Common suffixes
                     'afc', 'utd',
                 }
+                # Directional words that alone are not enough for a match
+                directional_words = {'east', 'west', 'north', 'south', 'central', 'southern', 'northern', 'eastern', 'western'}
+
                 search_words_significant = search_words - non_significant_words
 
                 if search_words_significant:
@@ -818,11 +824,18 @@ class LeagueDetector:
                         db_words = set(db_normalized.split())
                         db_words_significant = db_words - non_significant_words
 
-                        # Match if any significant word overlaps
+                        # Match requires either:
+                        # 1. More than 50% of search words match, OR
+                        # 2. Non-directional words overlap (not just east/west/north/south)
                         # This catches "Bayern" in both "FC Bayern München" and "Bayern Munich"
                         overlap = search_words_significant & db_words_significant
                         if overlap:
-                            leagues.add(row[0])
+                            non_directional_overlap = overlap - directional_words
+                            overlap_ratio = len(overlap) / len(search_words_significant)
+
+                            # Require >50% overlap OR non-directional match
+                            if non_directional_overlap or overlap_ratio > 0.5:
+                                leagues.add(row[0])
 
                     if leagues:
                         logger.debug(f"Found leagues via word-overlap search: '{team_name}' -> significant words: {search_words_significant}")
@@ -985,6 +998,9 @@ class LeagueDetector:
                     # Common suffixes
                     'afc', 'utd',
                 }
+                # Directional words that alone are not enough for a match
+                directional_words = {'east', 'west', 'north', 'south', 'central', 'southern', 'northern', 'eastern', 'western'}
+
                 search_words_significant = search_words - non_significant_words
 
                 if search_words_significant:
@@ -997,11 +1013,18 @@ class LeagueDetector:
                         db_words = set(db_normalized.split())
                         db_words_significant = db_words - non_significant_words
 
-                        # Match if any significant word overlaps
+                        # Match requires either:
+                        # 1. More than 50% of search words match, OR
+                        # 2. Non-directional words overlap (not just east/west/north/south)
                         overlap = search_words_significant & db_words_significant
                         if overlap:
-                            logger.debug(f"Team '{team_name}' matched via word-overlap: {row[1]} (shared: {overlap})")
-                            return row
+                            non_directional_overlap = overlap - directional_words
+                            overlap_ratio = len(overlap) / len(search_words_significant)
+
+                            # Require >50% overlap OR non-directional match
+                            if non_directional_overlap or overlap_ratio > 0.5:
+                                logger.debug(f"Team '{team_name}' matched via word-overlap: {row[1]} (shared: {overlap})")
+                                return row
 
                 return None
 
@@ -1252,7 +1275,9 @@ class LeagueDetector:
         self,
         stream_name: str,
         team1: str,
-        team2: str
+        team2: str,
+        game_date: datetime = None,
+        game_time: datetime = None
     ) -> DetectionResult:
         """
         Tier 1: Detect league from explicit league indicator in stream name.
@@ -1261,6 +1286,8 @@ class LeagueDetector:
 
         Note: Does NOT filter by enabled_leagues - the enabled check happens
         in the caller after a successful match.
+
+        IMPORTANT: Only returns success if an event_id is found!
         """
         detected_league = None
 
@@ -1289,14 +1316,71 @@ class LeagueDetector:
 
         sport = get_sport_for_league(detected_league)
 
+        # CRITICAL: Must verify a game exists and get event_id
+        # League indicator alone is not sufficient for success
+        if not self.espn or not team1 or not team2:
+            logger.debug(f"Tier 1: League indicator {detected_league} found but cannot verify game (no ESPN client or teams)")
+            return DetectionResult(
+                detected=False,
+                method=f"League indicator {detected_league} found but cannot verify game exists",
+                candidates_checked=[detected_league]
+            )
+
+        # Resolve team IDs
+        from epg.team_league_cache import TeamLeagueCache
+        team1_id = team2_id = None
+
+        team1_info = TeamLeagueCache.get_team_info(team1)
+        if team1_info:
+            for ti in team1_info:
+                if ti.league == detected_league:
+                    team1_id = ti.espn_team_id
+                    break
+            if not team1_id and team1_info:
+                team1_id = team1_info[0].espn_team_id
+
+        team2_info = TeamLeagueCache.get_team_info(team2)
+        if team2_info:
+            for ti in team2_info:
+                if ti.league == detected_league:
+                    team2_id = ti.espn_team_id
+                    break
+            if not team2_id and team2_info:
+                team2_id = team2_info[0].espn_team_id
+
+        if not team1_id or not team2_id:
+            logger.debug(f"Tier 1: League indicator {detected_league} found but cannot resolve team IDs")
+            return DetectionResult(
+                detected=False,
+                method=f"League indicator {detected_league} found but cannot resolve team IDs",
+                candidates_checked=[detected_league]
+            )
+
+        # Search for actual game
+        schedule_result = self._search_schedules(
+            str(team1_id), str(team2_id),
+            [detected_league], game_time, TIME_TOLERANCE_MINUTES if game_time else None
+        )
+
+        if not schedule_result:
+            logger.debug(f"Tier 1: League indicator {detected_league} found but no game between teams")
+            return DetectionResult(
+                detected=False,
+                method=f"League indicator {detected_league} found but no game between teams",
+                candidates_checked=[detected_league]
+            )
+
+        closest = schedule_result[0]
         return DetectionResult(
             detected=True,
             league=detected_league,
             sport=sport,
             tier=1,
             tier_detail='1',
-            method=f"League indicator '{detected_league.upper()}' found in stream name",
-            candidates_checked=[detected_league]
+            method=f"League indicator '{detected_league.upper()}' + game verified",
+            candidates_checked=[detected_league],
+            event_id=closest.event_id,
+            event_date=closest.event_date
         )
 
     # ==========================================================================
@@ -1307,7 +1391,9 @@ class LeagueDetector:
         self,
         stream_name: str,
         team1: str,
-        team2: str
+        team2: str,
+        game_date: datetime = None,
+        game_time: datetime = None
     ) -> DetectionResult:
         """
         Tier 2: Detect league from sport indicator + team lookup.
@@ -1316,6 +1402,8 @@ class LeagueDetector:
 
         Note: Does NOT filter by enabled_leagues - the enabled check happens
         in the caller after a successful match.
+
+        IMPORTANT: Only returns success if an event_id is found!
         """
         detected_sport = None
         sport_leagues = []
@@ -1337,14 +1425,71 @@ class LeagueDetector:
 
             if len(matching_leagues) == 1:
                 league = matching_leagues[0]
+
+                # CRITICAL: Must verify a game exists and get event_id
+                if not self.espn:
+                    logger.debug(f"Tier 2: Sport {detected_sport} + league {league} but no ESPN client")
+                    return DetectionResult(
+                        detected=False,
+                        method=f"Sport indicator '{detected_sport}' + {league} but cannot verify game",
+                        candidates_checked=sport_leagues
+                    )
+
+                # Resolve team IDs
+                from epg.team_league_cache import TeamLeagueCache
+                team1_id = team2_id = None
+
+                team1_info = TeamLeagueCache.get_team_info(team1)
+                if team1_info:
+                    for ti in team1_info:
+                        if ti.league == league:
+                            team1_id = ti.espn_team_id
+                            break
+                    if not team1_id and team1_info:
+                        team1_id = team1_info[0].espn_team_id
+
+                team2_info = TeamLeagueCache.get_team_info(team2)
+                if team2_info:
+                    for ti in team2_info:
+                        if ti.league == league:
+                            team2_id = ti.espn_team_id
+                            break
+                    if not team2_id and team2_info:
+                        team2_id = team2_info[0].espn_team_id
+
+                if not team1_id or not team2_id:
+                    logger.debug(f"Tier 2: Sport {detected_sport} + league {league} but cannot resolve team IDs")
+                    return DetectionResult(
+                        detected=False,
+                        method=f"Sport indicator '{detected_sport}' + {league} but cannot resolve team IDs",
+                        candidates_checked=sport_leagues
+                    )
+
+                # Search for actual game
+                schedule_result = self._search_schedules(
+                    str(team1_id), str(team2_id),
+                    [league], game_time, TIME_TOLERANCE_MINUTES if game_time else None
+                )
+
+                if not schedule_result:
+                    logger.debug(f"Tier 2: Sport {detected_sport} + league {league} but no game between teams")
+                    return DetectionResult(
+                        detected=False,
+                        method=f"Sport indicator '{detected_sport}' + {league} but no game between teams",
+                        candidates_checked=sport_leagues
+                    )
+
+                closest = schedule_result[0]
                 return DetectionResult(
                     detected=True,
                     league=league,
                     sport=get_sport_for_league(league),
                     tier=2,
                     tier_detail='2',
-                    method=f"Sport indicator '{detected_sport}' + teams in {league.upper()}",
-                    candidates_checked=sport_leagues
+                    method=f"Sport indicator '{detected_sport}' + game verified in {league.upper()}",
+                    candidates_checked=sport_leagues,
+                    event_id=closest.event_id,
+                    event_date=closest.event_date
                 )
             elif len(matching_leagues) > 1:
                 # Multiple leagues within sport - need Tier 3 disambiguation
@@ -1404,15 +1549,98 @@ class LeagueDetector:
             )
 
         if len(candidates) == 1:
-            # Unambiguous - only one league has both teams
+            # Single candidate - but we still need to verify a game exists
+            # If no game exists, the teams may have been matched incorrectly
             league = candidates[0]
+
+            # Try to verify a game exists (if we have ESPN client)
+            if self.espn:
+                # Get team IDs for this league
+                from epg.team_league_cache import TeamLeagueCache
+                local_team1_id = team1_id
+                local_team2_id = team2_id
+
+                if not local_team1_id:
+                    team1_info = TeamLeagueCache.get_team_info(team1)
+                    if team1_info:
+                        # Filter to this specific league
+                        for ti in team1_info:
+                            if ti.league == league:
+                                local_team1_id = ti.espn_team_id
+                                break
+                        if not local_team1_id and team1_info:
+                            local_team1_id = team1_info[0].espn_team_id
+
+                if not local_team2_id:
+                    team2_info = TeamLeagueCache.get_team_info(team2)
+                    if team2_info:
+                        for ti in team2_info:
+                            if ti.league == league:
+                                local_team2_id = ti.espn_team_id
+                                break
+                        if not local_team2_id and team2_info:
+                            local_team2_id = team2_info[0].espn_team_id
+
+                # If we have team IDs, check if a game exists
+                if local_team1_id and local_team2_id:
+                    from epg.league_config import get_league_config, parse_api_path
+                    from database import get_connection
+                    config = get_league_config(league, get_connection)
+                    if config:
+                        sport, api_league = parse_api_path(config['api_path'])
+                        if sport:
+                            schedule_result = self._search_schedules(
+                                str(local_team1_id), str(local_team2_id),
+                                [league], game_time, TIME_TOLERANCE_MINUTES if game_time else None
+                            )
+                            if schedule_result:
+                                # Game found - Tier 3 success
+                                closest = schedule_result[0]
+                                tier_detail = '3a' if game_date and game_time else '3b' if game_time else '3c'
+                                return DetectionResult(
+                                    detected=True,
+                                    league=league,
+                                    sport=sport,
+                                    tier=3,
+                                    tier_detail=tier_detail,
+                                    method=f"Game found in {league.upper()}",
+                                    candidates_checked=candidates,
+                                    event_id=closest.event_id,
+                                    event_date=closest.event_date
+                                )
+                            else:
+                                # No game between matched teams - try Tier 4a
+                                logger.debug(
+                                    f"Single candidate {league} but no game between matched teams, "
+                                    f"trying Tier 4a schedule search"
+                                )
+                                fallback_result = self._schedule_search_fallback(
+                                    team1, team2, game_date, game_time
+                                )
+                                if fallback_result and fallback_result.detected:
+                                    return fallback_result
+                    else:
+                        # League has no config (e.g., usa.ncaa.w.1 from soccer cache)
+                        # This league is in the cache but not in league_config
+                        # Try Tier 4 schedule search instead
+                        logger.debug(
+                            f"Single candidate {league} has no league_config, "
+                            f"trying Tier 4 schedule search"
+                        )
+                        fallback_result = self._schedule_search_fallback(
+                            team1, team2, game_date, game_time
+                        )
+                        if fallback_result and fallback_result.detected:
+                            return fallback_result
+
+            # Cannot verify game exists - NO SUCCESS without event_id
+            # (happens when no ESPN client or couldn't get team IDs or config missing)
+            logger.debug(
+                f"Single candidate {league} but cannot verify game exists (no ESPN/team IDs/config)"
+            )
             return DetectionResult(
-                detected=True,
-                league=league,
-                sport=get_sport_for_league(league),
-                tier=3,
-                tier_detail='3c',  # Single candidate, no schedule check needed
-                method=f"Only league with both teams: {league.upper()}",
+                detected=False,
+                method=f"League {league.upper()} found but cannot verify game exists",
                 candidates_checked=candidates
             )
 
@@ -1441,17 +1669,12 @@ class LeagueDetector:
                     logger.debug(f"Resolved team2 '{team2}' to ID {team2_id}")
 
         # If we still don't have IDs, we can't do schedule disambiguation
+        # NO SUCCESS without event_id - team ID resolution failed
         if not team1_id or not team2_id:
             logger.warning(f"Could not resolve team IDs for schedule check: {team1}={team1_id}, {team2}={team2_id}")
-            # Return first candidate as best guess
-            league = candidates[0]
             return DetectionResult(
-                detected=True,
-                league=league,
-                sport=get_sport_for_league(league),
-                tier=3,
-                tier_detail='3c',
-                method=f"First candidate (could not resolve team IDs): {league.upper()}",
+                detected=False,
+                method=f"Cannot resolve team IDs for schedule verification",
                 candidates_checked=candidates
             )
 
@@ -1640,10 +1863,21 @@ class LeagueDetector:
         )
 
     # ==========================================================================
-    # TIER 4: SINGLE-TEAM SCHEDULE FALLBACK
+    # TIER 4: SCHEDULE SEARCH FALLBACK
+    # ==========================================================================
+    #
+    # Tier 4 is used when Tier 3 (both teams in cache with game found) fails.
+    # It searches team schedules looking for opponent by NAME string.
+    #
+    # Sub-tiers:
+    #   4a: Both teams in cache but no game between them → search each team's
+    #       schedule for the RAW opponent name (handles wrong cache matches)
+    #   4b: One team in cache + date/time → search for opponent name, exact time
+    #   4c: One team in cache only → search for opponent name, closest game
+    #
     # ==========================================================================
 
-    def _single_team_schedule_fallback(
+    def _schedule_search_fallback(
         self,
         team1: str,
         team2: str,
@@ -1651,15 +1885,15 @@ class LeagueDetector:
         game_time: datetime = None
     ) -> Optional[DetectionResult]:
         """
-        Final fallback: Search one team's schedule for opponent by NAME.
+        Tier 4 fallback: Search team schedules for opponent by NAME.
 
-        Used when only one team is in our caches (e.g., NAIA vs NCAA game).
-        Finds all leagues where ONE team exists, searches their schedules,
-        and matches opponent by name string instead of ID.
+        Handles cases where:
+        - Tier 4a: Both teams matched but to WRONG teams, no game between them
+        - Tier 4b/4c: Only one team in cache (e.g., NAIA vs NCAA game)
 
         Args:
-            team1: First team name (may or may not be in cache)
-            team2: Second team name (may or may not be in cache)
+            team1: First team name (raw from stream)
+            team2: Second team name (raw from stream)
             game_date: Optional target date from stream
             game_time: Optional target time from stream
 
@@ -1692,27 +1926,25 @@ class LeagueDetector:
         conn = get_connection()
         cursor = conn.cursor()
 
-        # Find which team(s) we have in our caches
-        team1_entries = []  # List of (team_id, league_code, team_name)
+        # Find all (team_id, league_code, team_name) entries for each raw team
+        team1_entries = []
         team2_entries = []
 
-        # Check US sports cache (team_league_cache)
-        # Use abbreviation variants to handle st/st., mt/mt., etc.
         for team_name, entries_list in [(team1, team1_entries), (team2, team2_entries)]:
             variants = get_abbreviation_variants(team_name)
             for variant in variants:
+                # Check US sports cache
                 cursor.execute("""
                     SELECT espn_team_id, league_code, team_name
                     FROM team_league_cache
                     WHERE LOWER(team_name) LIKE ?
                 """, (f'%{variant}%',))
                 for row in cursor.fetchall():
-                    # Avoid duplicates
                     entry = (row[0], row[1], row[2], 'us_sports')
                     if entry not in entries_list:
                         entries_list.append(entry)
 
-                # Also check soccer cache
+                # Check soccer cache
                 cursor.execute("""
                     SELECT espn_team_id, league_slug, team_name
                     FROM soccer_team_leagues
@@ -1725,103 +1957,130 @@ class LeagueDetector:
 
         conn.close()
 
-        # Determine which team we have and which we're searching for
-        if team1_entries and not team2_entries:
+        # Determine tier based on what we found
+        if team1_entries and team2_entries:
+            # TIER 4a: Both teams found in caches - search BOTH teams' schedules
+            # for the RAW opponent name (handles wrong cache matches)
+            logger.debug(
+                f"Tier 4a: both teams in cache ({len(team1_entries)} + {len(team2_entries)} entries), "
+                f"searching schedules for raw opponent names"
+            )
+            return self._search_both_teams_schedules(
+                team1, team1_entries,
+                team2, team2_entries,
+                target_dt
+            )
+        elif team1_entries and not team2_entries:
+            # TIER 4b/4c: Only team1 in cache
             known_team_entries = team1_entries
             unknown_team = team2
-            logger.debug(f"Single-team fallback: found {len(team1_entries)} entries for '{team1}', searching for '{team2}'")
+            logger.debug(f"Tier 4b/c: found {len(team1_entries)} entries for '{team1}', searching for '{team2}'")
         elif team2_entries and not team1_entries:
+            # TIER 4b/4c: Only team2 in cache
             known_team_entries = team2_entries
             unknown_team = team1
-            logger.debug(f"Single-team fallback: found {len(team2_entries)} entries for '{team2}', searching for '{team1}'")
-        elif team1_entries and team2_entries:
-            # Both teams found but no intersection - this shouldn't happen often
-            logger.debug(f"Single-team fallback: both teams found but no intersection")
-            return None
+            logger.debug(f"Tier 4b/c: found {len(team2_entries)} entries for '{team2}', searching for '{team1}'")
         else:
             # Neither team found
-            logger.debug(f"Single-team fallback: neither team found in caches")
+            logger.debug(f"Tier 4: neither team found in caches")
             return None
 
-        # Normalize unknown team name for matching
-        unknown_lower = unknown_team.lower()
-        # Extract first significant word for matching (e.g., "Calumet" from "Calumet College")
-        unknown_words = [w for w in unknown_lower.split() if w not in {'college', 'university', 'state', 'city'}]
-        unknown_primary = unknown_words[0] if unknown_words else unknown_lower.split()[0]
+        # Continue with single-team search (existing Tier 4b/4c logic)
+        return self._search_single_team_schedule(
+            known_team_entries, unknown_team, target_dt
+        )
 
-        candidates = []  # List of (event_id, event_date, league, sport, event_name)
+    def _search_both_teams_schedules(
+        self,
+        team1_raw: str,
+        team1_entries: List,
+        team2_raw: str,
+        team2_entries: List,
+        target_dt: datetime = None
+    ) -> Optional[DetectionResult]:
+        """
+        Tier 4a: Search BOTH teams' schedules for the raw opponent name.
+
+        When both teams are in cache but no game exists between the matched teams,
+        the cache match may be wrong. Search each team's schedule looking for
+        an event that contains the RAW opponent string.
+
+        Example: "IU East vs Eastern Kentucky"
+        - "IU East" wrongly matched to "IU Indianapolis"
+        - "Eastern Kentucky" correctly matched
+        - No game between IU Indianapolis and Eastern Kentucky
+        - But Eastern Kentucky's schedule contains "Indiana University East IU EAST..."
+        - We find it by searching for "iu east" in event names
+
+        Args:
+            team1_raw: Raw team1 string from stream
+            team1_entries: List of (team_id, league_code, team_name, cache_type)
+            team2_raw: Raw team2 string from stream
+            team2_entries: List of (team_id, league_code, team_name, cache_type)
+            target_dt: Optional target datetime for time matching
+
+        Returns:
+            DetectionResult if found, None otherwise
+        """
+        from epg.league_config import get_league_config, parse_api_path
+        from database import get_connection
+
         now = datetime.now(ZoneInfo('UTC'))
         cutoff_future = now + timedelta(days=self.lookahead_days)
 
-        for team_id, league_code, team_name, cache_type in known_team_entries:
-            try:
-                # Get API path for this league
-                config = get_league_config(league_code, get_connection)
-                if not config:
-                    logger.debug(f"  Skipping {league_code} - no league_config")
-                    continue
+        # Extract primary words for matching (skip common words)
+        common_words = {'college', 'university', 'state', 'city', 'the', 'of', 'at'}
 
-                sport, api_league = parse_api_path(config['api_path'])
-                if not sport:
-                    continue
+        def get_primary_word(name: str) -> str:
+            words = [w for w in name.lower().split() if w not in common_words]
+            return words[0] if words else name.lower().split()[0] if name else ''
 
-                # Fetch schedule for this team
-                schedule = self.espn.get_team_schedule(sport, api_league, str(team_id))
-                if not schedule or 'events' not in schedule:
-                    continue
+        team1_lower = team1_raw.lower().strip()
+        team2_lower = team2_raw.lower().strip()
+        team1_primary = get_primary_word(team1_raw)
+        team2_primary = get_primary_word(team2_raw)
 
-                for event in schedule.get('events', []):
-                    event_name = event.get('name', '')
-                    event_name_lower = event_name.lower()
+        candidates = []  # List of (event_id, event_dt, league_code, sport, event_name)
 
-                    # Check if unknown team name appears in event name
-                    if unknown_primary not in event_name_lower:
-                        continue
+        # Search team1's schedules for team2_raw
+        for team_id, league_code, team_name, cache_type in team1_entries:
+            self._search_schedule_for_opponent(
+                team_id, league_code, team_name,
+                team2_lower, team2_primary,
+                now, cutoff_future, target_dt, candidates
+            )
 
-                    # Parse event date
-                    event_date_str = event.get('date', '')
-                    if not event_date_str:
-                        continue
-
-                    try:
-                        event_dt = datetime.fromisoformat(event_date_str.replace('Z', '+00:00'))
-                    except:
-                        continue
-
-                    # Check if within lookahead window
-                    if event_dt < now - timedelta(days=1) or event_dt > cutoff_future:
-                        continue
-
-                    event_id = event.get('id')
-                    logger.debug(f"  Found match: {event_name} on {event_dt} in {league_code}")
-
-                    # If we have exact target time and this matches, return immediately
-                    if target_dt:
-                        target_utc = target_dt.astimezone(ZoneInfo('UTC')) if target_dt.tzinfo else target_dt.replace(tzinfo=ZoneInfo('UTC'))
-                        time_diff = abs((event_dt - target_utc).total_seconds() / 60)
-                        if time_diff <= TIME_TOLERANCE_MINUTES:
-                            logger.info(f"Tier 4: exact time match in {league_code}")
-                            return DetectionResult(
-                                detected=True,
-                                league=league_code,
-                                sport=sport,
-                                tier=4,
-                                tier_detail='4a',
-                                method=f"Tier 4: {event_name} (opponent matched by name, exact time)",
-                                event_id=event_id,
-                                event_date=event_dt
-                            )
-
-                    candidates.append((event_id, event_dt, league_code, sport, event_name))
-
-            except Exception as e:
-                logger.debug(f"  Error searching {league_code}: {e}")
-                continue
+        # Search team2's schedules for team1_raw
+        for team_id, league_code, team_name, cache_type in team2_entries:
+            self._search_schedule_for_opponent(
+                team_id, league_code, team_name,
+                team1_lower, team1_primary,
+                now, cutoff_future, target_dt, candidates
+            )
 
         if not candidates:
+            logger.debug("Tier 4a: no matches found in any schedule")
             return None
 
-        # No exact match found - return closest to target or now
+        # If we have exact time match with target, prefer it
+        if target_dt:
+            target_utc = target_dt.astimezone(ZoneInfo('UTC')) if target_dt.tzinfo else target_dt.replace(tzinfo=ZoneInfo('UTC'))
+            for event_id, event_dt, league_code, sport, event_name in candidates:
+                time_diff = abs((event_dt - target_utc).total_seconds() / 60)
+                if time_diff <= TIME_TOLERANCE_MINUTES:
+                    logger.info(f"Tier 4a: exact time match '{event_name}' in {league_code}")
+                    return DetectionResult(
+                        detected=True,
+                        league=league_code,
+                        sport=sport,
+                        tier=4,
+                        tier_detail='4a',
+                        method=f"Tier 4a: {event_name} (both teams, raw name match, exact time)",
+                        event_id=event_id,
+                        event_date=event_dt
+                    )
+
+        # Return closest to target or now
         if target_dt:
             target_utc = target_dt.astimezone(ZoneInfo('UTC')) if target_dt.tzinfo else target_dt.replace(tzinfo=ZoneInfo('UTC'))
             candidates.sort(key=lambda c: abs((c[1] - target_utc).total_seconds()))
@@ -1831,17 +2090,174 @@ class LeagueDetector:
         best = candidates[0]
         event_id, event_dt, league_code, sport, event_name = best
 
-        logger.info(f"Tier 4: best match is {event_name} in {league_code}")
+        logger.info(f"Tier 4a: best match '{event_name}' in {league_code}")
         return DetectionResult(
             detected=True,
             league=league_code,
             sport=sport,
             tier=4,
-            tier_detail='4b',
-            method=f"Tier 4: {event_name} (opponent matched by name, closest game)",
+            tier_detail='4a',
+            method=f"Tier 4a: {event_name} (both teams, raw name match, closest game)",
             event_id=event_id,
             event_date=event_dt
         )
+
+    def _search_schedule_for_opponent(
+        self,
+        team_id: str,
+        league_code: str,
+        team_name: str,
+        opponent_lower: str,
+        opponent_primary: str,
+        now: datetime,
+        cutoff_future: datetime,
+        target_dt: datetime,
+        candidates: List
+    ):
+        """
+        Helper: Search a single team's schedule for events matching opponent name.
+
+        Appends matching events to candidates list.
+        """
+        from epg.league_config import get_league_config, parse_api_path
+        from database import get_connection
+
+        try:
+            config = get_league_config(league_code, get_connection)
+            if not config:
+                return
+
+            sport, api_league = parse_api_path(config['api_path'])
+            if not sport:
+                return
+
+            schedule = self.espn.get_team_schedule(sport, api_league, str(team_id))
+            if not schedule or 'events' not in schedule:
+                return
+
+            for event in schedule.get('events', []):
+                event_name = event.get('name', '')
+                event_name_lower = event_name.lower()
+
+                # Check if opponent name appears in event name
+                if opponent_lower not in event_name_lower and opponent_primary not in event_name_lower:
+                    continue
+
+                event_date_str = event.get('date', '')
+                if not event_date_str:
+                    continue
+
+                try:
+                    event_dt = datetime.fromisoformat(event_date_str.replace('Z', '+00:00'))
+                except Exception:
+                    continue
+
+                # Check if within window
+                if event_dt < now - timedelta(days=1) or event_dt > cutoff_future:
+                    continue
+
+                event_id = event.get('id')
+                logger.debug(
+                    f"Tier 4 found: '{event_name}' in {team_name}'s {league_code} schedule "
+                    f"(matched '{opponent_lower}' or '{opponent_primary}')"
+                )
+                candidates.append((event_id, event_dt, league_code, sport, event_name))
+
+        except Exception as e:
+            logger.debug(f"Tier 4 error searching {team_name}'s {league_code} schedule: {e}")
+
+    def _search_single_team_schedule(
+        self,
+        known_team_entries: List,
+        unknown_team: str,
+        target_dt: datetime = None
+    ) -> Optional[DetectionResult]:
+        """
+        Tier 4b/4c: Search known team's schedule for unknown opponent by name.
+
+        Args:
+            known_team_entries: List of (team_id, league_code, team_name, cache_type)
+            unknown_team: Raw name of team NOT in cache
+            target_dt: Optional target datetime for matching
+
+        Returns:
+            DetectionResult if found, None otherwise
+        """
+        from epg.league_config import get_league_config, parse_api_path
+        from database import get_connection
+
+        now = datetime.now(ZoneInfo('UTC'))
+        cutoff_future = now + timedelta(days=self.lookahead_days)
+
+        # Normalize unknown team name for matching
+        unknown_lower = unknown_team.lower()
+        common_words = {'college', 'university', 'state', 'city'}
+        unknown_words = [w for w in unknown_lower.split() if w not in common_words]
+        unknown_primary = unknown_words[0] if unknown_words else unknown_lower.split()[0]
+
+        candidates = []
+
+        for team_id, league_code, team_name, cache_type in known_team_entries:
+            self._search_schedule_for_opponent(
+                team_id, league_code, team_name,
+                unknown_lower, unknown_primary,
+                now, cutoff_future, target_dt, candidates
+            )
+
+        if not candidates:
+            return None
+
+        # If we have exact time match, return immediately
+        if target_dt:
+            target_utc = target_dt.astimezone(ZoneInfo('UTC')) if target_dt.tzinfo else target_dt.replace(tzinfo=ZoneInfo('UTC'))
+            for event_id, event_dt, league_code, sport, event_name in candidates:
+                time_diff = abs((event_dt - target_utc).total_seconds() / 60)
+                if time_diff <= TIME_TOLERANCE_MINUTES:
+                    logger.info(f"Tier 4b: exact time match in {league_code}")
+                    return DetectionResult(
+                        detected=True,
+                        league=league_code,
+                        sport=sport,
+                        tier=4,
+                        tier_detail='4b',
+                        method=f"Tier 4b: {event_name} (single team, opponent by name, exact time)",
+                        event_id=event_id,
+                        event_date=event_dt
+                    )
+
+        # Return closest to target or now
+        if target_dt:
+            target_utc = target_dt.astimezone(ZoneInfo('UTC')) if target_dt.tzinfo else target_dt.replace(tzinfo=ZoneInfo('UTC'))
+            candidates.sort(key=lambda c: abs((c[1] - target_utc).total_seconds()))
+        else:
+            candidates.sort(key=lambda c: abs((c[1] - now).total_seconds()))
+
+        best = candidates[0]
+        event_id, event_dt, league_code, sport, event_name = best
+
+        tier_detail = '4b' if target_dt else '4c'
+        logger.info(f"Tier {tier_detail}: best match is {event_name} in {league_code}")
+        return DetectionResult(
+            detected=True,
+            league=league_code,
+            sport=sport,
+            tier=4,
+            tier_detail=tier_detail,
+            method=f"Tier {tier_detail}: {event_name} (single team, opponent by name, closest game)",
+            event_id=event_id,
+            event_date=event_dt
+        )
+
+    # Legacy alias for backward compatibility
+    def _single_team_schedule_fallback(
+        self,
+        team1: str,
+        team2: str,
+        game_date: datetime = None,
+        game_time: datetime = None
+    ) -> Optional[DetectionResult]:
+        """Legacy alias - calls _schedule_search_fallback."""
+        return self._schedule_search_fallback(team1, team2, game_date, game_time)
 
     # ==========================================================================
     # SCHEDULE SEARCH HELPERS

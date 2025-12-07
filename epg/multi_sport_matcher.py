@@ -12,6 +12,7 @@ Tiered Detection Flow:
   Tier 3c: Teams only → Closest game to now
   Tier 4a: One team + Date/Time → Search schedule for opponent by name
   Tier 4b: One team only → Search schedule for opponent, closest game
+  Tier 4b+: Both teams matched but no game → Search schedules for RAW opponent name
 """
 
 from dataclasses import dataclass, field
@@ -293,34 +294,57 @@ class MultiSportMatcher:
                 home_team_id = team_result.get('home_team_id') if team_result else None
 
                 if not away_team_id or not home_team_id:
-                    logger.warning(f"Missing team IDs: away={away_team_id}, home={home_team_id} for stream '{stream_name}'")
-                    result.reason = 'MISSING_TEAM_IDS'
-                    return result
-
-                # Optimization: If disambiguation already found the event, enrich it instead
-                # of calling find_and_enrich() which would re-fetch the same event
-                if pre_found_event and pre_found_event.get('found'):
-                    # Event already found during disambiguation - just enrich it
-                    event_result = pre_found_event
-                    if self.event_matcher.enricher and event_result.get('event'):
-                        event_result['event'] = self.event_matcher.enricher.enrich_event(
-                            event_result['event'],
-                            detected_league,
-                            include_scoreboard=True,
-                            include_team_stats=True
-                        )
-                    logger.debug(f"Using pre-found event from disambiguation for '{stream_name[:40]}...'")
-                else:
-                    # No pre-found event - fetch and enrich
-                    event_result = self.event_matcher.find_and_enrich(
-                        away_team_id,
-                        home_team_id,
-                        detected_league,
-                        game_date=team_result.get('game_date'),
-                        game_time=team_result.get('game_time'),
-                        include_final_events=self.config.include_final_events,
-                        api_path_override=detected_api_path_override
+                    # Team IDs missing - try Tier 4b+ schedule search before giving up
+                    # This handles cases where the detected league was wrong but we can
+                    # still find the game by searching all leagues the teams appear in
+                    logger.debug(
+                        f"Missing team IDs for '{stream_name[:40]}...', "
+                        f"trying Tier 4b+ schedule search"
                     )
+                    schedule_result = self._search_schedules_for_raw_opponent(
+                        team_result or {}, raw_team1, raw_team2,
+                        detected_league, detected_api_path_override
+                    )
+                    if schedule_result:
+                        event_result, team_result = schedule_result
+                        if event_result.get('found'):
+                            # Update detected_league from the successful search
+                            detected_league = team_result.get('detected_league', detected_league)
+                            # event_result is already set, will be handled by success path below
+                        else:
+                            logger.warning(f"Missing team IDs: away={away_team_id}, home={home_team_id} for stream '{stream_name}'")
+                            result.reason = 'MISSING_TEAM_IDS'
+                            return result
+                    else:
+                        logger.warning(f"Missing team IDs: away={away_team_id}, home={home_team_id} for stream '{stream_name}'")
+                        result.reason = 'MISSING_TEAM_IDS'
+                        return result
+                else:
+                    # Have team IDs - proceed with normal event lookup
+                    # Optimization: If disambiguation already found the event, enrich it instead
+                    # of calling find_and_enrich() which would re-fetch the same event
+                    if pre_found_event and pre_found_event.get('found'):
+                        # Event already found during disambiguation - just enrich it
+                        event_result = pre_found_event
+                        if self.event_matcher.enricher and event_result.get('event'):
+                            event_result['event'] = self.event_matcher.enricher.enrich_event(
+                                event_result['event'],
+                                detected_league,
+                                include_scoreboard=True,
+                                include_team_stats=True
+                            )
+                        logger.debug(f"Using pre-found event from disambiguation for '{stream_name[:40]}...'")
+                    else:
+                        # No pre-found event - fetch and enrich
+                        event_result = self.event_matcher.find_and_enrich(
+                            away_team_id,
+                            home_team_id,
+                            detected_league,
+                            game_date=team_result.get('game_date'),
+                            game_time=team_result.get('game_time'),
+                            include_final_events=self.config.include_final_events,
+                            api_path_override=detected_api_path_override
+                        )
 
             # Defensive check: ensure event_result is a dict
             if event_result is None:
@@ -344,7 +368,7 @@ class MultiSportMatcher:
                 team_result['detected_league'] = detected_league
 
                 if detection_tier:
-                    logger.debug(f"[TIER {detection_tier}] {stream_name[:50]}... → {detected_league.upper()}")
+                    logger.info(f"[TIER {detection_tier}] {stream_name[:50]}... → {detected_league.upper()}")
 
                 # Check if detected league is enabled
                 # For professional soccer leagues, also check soccer_enabled flag (enables all pro soccer)
@@ -582,11 +606,12 @@ class MultiSportMatcher:
             found_event = found_result
             detection_tier = '3c'
         # If no game found in any league, fall back to first match
+        # BUT do NOT set detection_tier - no event was found, so no tier success
         elif not detected_league and matched_candidates:
             detected_league, team_result, api_override = matched_candidates[0]
             detected_api_path_override = api_override
-            detection_tier = '3c'
-            # No event found in this case
+            # detection_tier stays None - no event was found
+            # The caller must still try to find an event or fail
 
         # For soccer leagues detected via cache, check if we need api_path_override
         if detected_league and not detected_api_path_override:
@@ -678,4 +703,198 @@ class MultiSportMatcher:
                     )
                     return alt_result, team_result
 
+        # Tier 4b+ fallback: Both teams matched but no game between them
+        # Search each matched team's schedule for opponent name matching the RAW opponent string
+        # This handles cases like "IU East" → IU Indianapolis (wrong), but Eastern Kentucky's
+        # schedule contains "Indiana University East IU EAST at Eastern Kentucky Colonels"
+        schedule_result = self._search_schedules_for_raw_opponent(
+            team_result, raw_away, raw_home, detected_league, api_path_override
+        )
+        if schedule_result:
+            return schedule_result
+
         return {'found': False}, team_result
+
+    def _search_schedules_for_raw_opponent(
+        self, team_result: Dict, raw_away: str, raw_home: str,
+        detected_league: str, api_path_override: str
+    ) -> Optional[tuple]:
+        """
+        Tier 4b+ fallback: Search each team's schedule across ALL their leagues.
+
+        When both teams are matched to DB entries but no game exists between them,
+        search EACH matched team's schedule across ALL leagues they appear in,
+        looking for an event containing the RAW opponent string.
+
+        This handles cases where:
+        - "IU East" matched to "IU Indianapolis" (wrong - word overlap on "IU")
+        - "Eastern Kentucky" matched correctly to women's college basketball
+        - No game between these mismatched teams
+        - But Eastern Kentucky's BASKETBALL schedule contains:
+          "Indiana University East IU EAST at Eastern Kentucky Colonels"
+        - We find it by checking ALL leagues Eastern Kentucky plays in.
+
+        Args:
+            team_result: Current team_result with matched team IDs
+            raw_away: Raw away team string from stream name
+            raw_home: Raw home team string from stream name
+            detected_league: Originally detected league code (may not be correct)
+            api_path_override: Optional API path override for soccer
+
+        Returns:
+            Tuple of (event_result, team_result) if found, None otherwise
+        """
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+        from epg.league_config import get_league_config, parse_api_path
+        from epg.team_league_cache import TeamLeagueCache
+        from database import get_connection
+
+        # Normalize raw names for substring matching
+        raw_away_lower = raw_away.lower().strip()
+        raw_home_lower = raw_home.lower().strip()
+
+        # Extract significant words (skip common words)
+        common_words = {'college', 'university', 'state', 'city', 'the', 'of', 'at'}
+
+        def get_primary_word(name: str) -> str:
+            """Extract first significant word from team name."""
+            words = [w for w in name.lower().split() if w not in common_words]
+            return words[0] if words else name.lower().split()[0] if name else ''
+
+        raw_away_primary = get_primary_word(raw_away)
+        raw_home_primary = get_primary_word(raw_home)
+
+        logger.debug(
+            f"Tier 4b+ fallback: searching schedules across all leagues. "
+            f"Raw: '{raw_away}' vs '{raw_home}'"
+        )
+
+        now = datetime.now(ZoneInfo('UTC'))
+        cutoff_future = now + timedelta(days=14)
+
+        # Collect all (team_id, league_code) pairs for each raw team name
+        # This searches ALL leagues each team appears in
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        # Build list of (team_id, league, team_name, opponent_raw, opponent_primary)
+        teams_to_search = []
+
+        # For team1 (raw_away): search for events where opponent matches raw_home
+        # Check both non-soccer and soccer caches
+        for raw_name, opponent_raw, opponent_primary in [
+            (raw_away, raw_home_lower, raw_home_primary),
+            (raw_home, raw_away_lower, raw_away_primary)
+        ]:
+            # Search non-soccer cache (team_league_cache)
+            cursor.execute("""
+                SELECT espn_team_id, league_code, team_name
+                FROM team_league_cache
+                WHERE LOWER(team_name) LIKE ?
+            """, (f'%{raw_name}%',))
+            for row in cursor.fetchall():
+                teams_to_search.append((
+                    row[0], row[1], row[2], opponent_raw, opponent_primary
+                ))
+
+            # Also search soccer cache
+            cursor.execute("""
+                SELECT espn_team_id, league_slug, team_name
+                FROM soccer_team_leagues
+                WHERE LOWER(team_name) LIKE ?
+            """, (f'%{raw_name}%',))
+            for row in cursor.fetchall():
+                teams_to_search.append((
+                    row[0], row[1], row[2], opponent_raw, opponent_primary
+                ))
+
+        conn.close()
+
+        if not teams_to_search:
+            logger.debug("Tier 4b+ fallback: no team entries found in caches")
+            return None
+
+        logger.debug(f"Tier 4b+ fallback: checking {len(teams_to_search)} (team, league) pairs")
+
+        candidates = []  # List of (event_id, event_dt, league_code, event_dict, via_team_name)
+
+        for team_id, league_code, team_name, opponent_raw, opponent_primary in teams_to_search:
+            try:
+                # Get API path for this league
+                config = get_league_config(league_code, get_connection)
+                if not config:
+                    continue
+
+                sport, api_league = parse_api_path(config['api_path'])
+                if not sport:
+                    continue
+
+                # Fetch schedule for this team in this league
+                schedule = self.event_matcher.espn.get_team_schedule(
+                    sport, api_league, str(team_id)
+                )
+                if not schedule or 'events' not in schedule:
+                    continue
+
+                for event in schedule.get('events', []):
+                    event_name = event.get('name', '')
+                    event_name_lower = event_name.lower()
+
+                    # Check if RAW opponent name appears in event name
+                    if opponent_raw not in event_name_lower and opponent_primary not in event_name_lower:
+                        continue
+
+                    # Parse event date
+                    event_date_str = event.get('date', '')
+                    if not event_date_str:
+                        continue
+
+                    try:
+                        event_dt = datetime.fromisoformat(event_date_str.replace('Z', '+00:00'))
+                    except Exception:
+                        continue
+
+                    # Check if within window
+                    if event_dt < now - timedelta(days=1) or event_dt > cutoff_future:
+                        continue
+
+                    event_id = event.get('id')
+                    logger.debug(
+                        f"Tier 4b+ found: '{event_name}' in {team_name}'s {league_code} schedule "
+                        f"(matched '{opponent_raw}' or '{opponent_primary}')"
+                    )
+                    candidates.append((event_id, event_dt, league_code, event, team_name))
+
+            except Exception as e:
+                logger.debug(f"Tier 4b+ error searching {team_name}'s {league_code} schedule: {e}")
+                continue
+
+        if not candidates:
+            logger.debug("Tier 4b+ fallback: no matches found in any schedule")
+            return None
+
+        # Sort by time closest to now
+        candidates.sort(key=lambda c: abs((c[1] - now).total_seconds()))
+        best_event_id, best_event_dt, best_league, best_event, via_team = candidates[0]
+
+        logger.info(
+            f"Tier 4b+ match: '{best_event.get('name')}' in {best_league} "
+            f"via {via_team}'s schedule (raw: '{raw_away}' vs '{raw_home}')"
+        )
+
+        # Fetch and enrich the event by ID using the correct league
+        event = self.event_matcher.get_event_by_id(best_event_id, best_league)
+
+        if event and event.get('id'):
+            # Update team_result with Tier 4b+ info
+            team_result['tier4b_plus'] = True
+            team_result['tier4b_plus_via'] = via_team
+            team_result['tier4b_plus_event_id'] = best_event_id
+            team_result['detected_league'] = best_league
+
+            event_result = {'found': True, 'event': event, 'event_id': event.get('id')}
+            return event_result, team_result
+
+        logger.debug(f"Tier 4b+ fallback: event {best_event_id} not found via get_event_by_id")
+        return None
