@@ -84,6 +84,12 @@ class EventMatcher:
         self._scoreboard_cache: Dict[str, Optional[Dict]] = {}
         self._scoreboard_cache_lock = threading.Lock()
 
+        # Counters for monitoring scoreboard-first effectiveness
+        self._scoreboard_hits = 0
+        self._scoreboard_misses = 0
+        self._schedule_fallbacks = 0
+        self._counters_lock = threading.Lock()
+
     def _get_league_config(self, league_code: str) -> Optional[Dict]:
         """Get league configuration (sport, api_path) using shared module."""
         return get_league_config(league_code, self.db_connection_func, self._league_config)
@@ -92,6 +98,29 @@ class EventMatcher:
         """Clear scoreboard cache. Call at start of each EPG generation."""
         with self._scoreboard_cache_lock:
             self._scoreboard_cache.clear()
+
+    def get_matching_stats(self) -> Dict[str, int]:
+        """
+        Get scoreboard-first matching statistics.
+
+        Returns dict with:
+        - scoreboard_hits: Number of matches found via scoreboard
+        - scoreboard_misses: Number of times scoreboard had no match
+        - schedule_fallbacks: Number of matches found via schedule after scoreboard miss
+        """
+        with self._counters_lock:
+            return {
+                'scoreboard_hits': self._scoreboard_hits,
+                'scoreboard_misses': self._scoreboard_misses,
+                'schedule_fallbacks': self._schedule_fallbacks
+            }
+
+    def reset_matching_stats(self):
+        """Reset matching statistics. Call at start of each EPG generation."""
+        with self._counters_lock:
+            self._scoreboard_hits = 0
+            self._scoreboard_misses = 0
+            self._schedule_fallbacks = 0
 
     def _get_scoreboard_cached(self, sport: str, api_league: str, date_str: str) -> Optional[Dict]:
         """
@@ -495,30 +524,46 @@ class EventMatcher:
                 logger.debug(f"[TRACE] find_event FAIL | reason=invalid api_path")
                 return result
 
-        # Try team1's schedule first (future games)
-        logger.debug(f"[TRACE] Searching team1 ({team1_id}) schedule for opponent {team2_id}")
-        matching_events, skip_reason, error = self._search_team_schedule(
+        # ================================================================
+        # SCOREBOARD FIRST: Check scoreboard (fast, cached, has today's games)
+        # ================================================================
+        # The scoreboard is fetched once per league/date and cached. For pro sports
+        # it has all games. For college sports, we use groups param to get all D1 games.
+        # This eliminates ~1200 schedule API calls per EPG generation.
+        logger.debug(f"[TRACE] Checking scoreboard for {team1_id} vs {team2_id} in {league}")
+        matching_events, skip_reason, error = self._search_scoreboard(
             team1_id, team2_id, sport, api_league, include_final_events
         )
 
-        # If no match found on team1's schedule, try team2's schedule as fallback
-        if not matching_events and not skip_reason:
-            logger.debug(f"[TRACE] No match on team1 schedule, trying team2 ({team2_id}) schedule")
-            matching_events, skip_reason, error = self._search_team_schedule(
-                team2_id, team1_id, sport, api_league, include_final_events
-            )
-            if matching_events:
-                logger.info(f"[TRACE] Found game via team2 ({team2_id}) schedule fallback")
+        if matching_events:
+            logger.debug(f"[SCOREBOARD HIT] Found {team1_id} vs {team2_id} in {league}")
+            with self._counters_lock:
+                self._scoreboard_hits += 1
 
-        # Scoreboard fallback: schedule API doesn't include today's games for many sports
-        # Check scoreboard for ALL sports (not just soccer)
+        # ================================================================
+        # SCHEDULE FALLBACK: If not on scoreboard (D2/D3/NAIA, far future, etc.)
+        # ================================================================
+        # Scoreboard may miss: D2/D3/NAIA games, games > 7 days out, exhibitions
         if not matching_events and not skip_reason:
-            logger.debug(f"[TRACE] No match in schedule, trying scoreboard for {league}")
-            matching_events, skip_reason, error = self._search_scoreboard(
+            logger.debug(f"[SCOREBOARD MISS] Falling back to schedule for {team1_id} vs {team2_id}")
+            with self._counters_lock:
+                self._scoreboard_misses += 1
+
+            # Try team1's schedule
+            matching_events, skip_reason, error = self._search_team_schedule(
                 team1_id, team2_id, sport, api_league, include_final_events
             )
+
+            # If no match, try team2's schedule
+            if not matching_events and not skip_reason:
+                matching_events, skip_reason, error = self._search_team_schedule(
+                    team2_id, team1_id, sport, api_league, include_final_events
+                )
+
             if matching_events:
-                logger.info(f"[TRACE] Found game via scoreboard for {league}")
+                logger.info(f"[SCHEDULE FALLBACK] Found via schedule after scoreboard miss")
+                with self._counters_lock:
+                    self._schedule_fallbacks += 1
 
         if error and not matching_events:
             result['reason'] = error

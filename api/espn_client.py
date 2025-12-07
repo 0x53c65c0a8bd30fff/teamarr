@@ -46,6 +46,17 @@ class ESPNClient:
     per EPG generation cycle.
     """
 
+    # Group IDs for college sports scoreboards
+    # Adding groups param unlocks full D1 scoreboard (all games vs just featured)
+    # Without groups: ~5-10 featured games; with groups=50: ~48-61 all D1 games
+    COLLEGE_SCOREBOARD_GROUPS = {
+        'mens-college-basketball': '50',
+        'womens-college-basketball': '50',
+        'college-football': '80',  # FBS
+        'mens-college-hockey': '50',
+        'womens-college-hockey': '50',
+    }
+
     # Class-level caches shared across all instances
     # Key: (sport, league, date), Value: scoreboard data
     _scoreboard_cache: Dict[tuple, Optional[Dict]] = {}
@@ -623,8 +634,12 @@ class ESPNClient:
                 logger.debug(f"Scoreboard cache hit (after lock) for {sport}/{league}/{date}")
                 return self._scoreboard_cache[cache_key]
 
-            # Fetch from API
+            # Build URL with optional groups param for college sports
+            # This unlocks full D1 scoreboard (all games vs just featured)
             url = f"{self.base_url}/{sport}/{league}/scoreboard?dates={date}"
+            if league in self.COLLEGE_SCOREBOARD_GROUPS:
+                url += f"&groups={self.COLLEGE_SCOREBOARD_GROUPS[league]}"
+
             result = self._make_request(url)
 
             # Cache the result (even if None to avoid re-fetching failures)
