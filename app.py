@@ -518,11 +518,13 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                     # Teams were parsed but no event found - check if reason is excludable
                     normalized = INTERNAL_REASONS.get(result.reason, result.reason)
                     if normalized in (FilterReason.GAME_PAST, FilterReason.GAME_FINAL_EXCLUDED,
-                                     FilterReason.NO_GAME_FOUND, FilterReason.LEAGUE_NOT_ENABLED):
+                                     FilterReason.LEAGUE_NOT_ENABLED):
                         # Return as filtered so it's excluded from match rate denominator
+                        # Note: NO_GAME_FOUND is NOT excluded - it counts against match rate
                         return {'type': 'filtered', 'reason': normalized, 'stream': stream}
                     else:
                         # True no_teams case - teams parsed but couldn't match to ESPN
+                        # This includes NO_GAME_FOUND which counts against match rate
                         return {
                             'type': 'no_teams',
                             'stream': stream,
@@ -586,7 +588,8 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                 reason = result.get('reason')
                 if reason == FilterReason.GAME_FINAL_EXCLUDED:
                     filtered_final += 1
-                elif reason in (FilterReason.GAME_PAST, FilterReason.NO_GAME_FOUND):
+                elif reason == FilterReason.GAME_PAST:
+                    # Only GAME_PAST is excluded from denominator (not NO_GAME_FOUND)
                     filtered_outside_lookahead += 1
                 elif reason == FilterReason.LEAGUE_NOT_ENABLED:
                     filtered_league_not_enabled += 1
