@@ -302,14 +302,63 @@ class TeamMatcher:
         """
         return get_league_config(league_code, self.db_connection_func, self._league_config)
 
+    def _load_teams_from_db_cache(self, league_code: str) -> Optional[List[Dict]]:
+        """
+        Load teams from TeamLeagueCache database table.
+
+        The team_league_cache table is pre-populated on startup and contains
+        all teams for non-soccer leagues. This avoids hitting ESPN API during
+        EPG generation.
+
+        Args:
+            league_code: League code (e.g., 'nfl', 'mens-college-basketball')
+
+        Returns:
+            List of team dicts or None if not found in DB cache
+        """
+        if not self.db_connection_func:
+            return None
+
+        try:
+            conn = self.db_connection_func()
+            cursor = conn.execute("""
+                SELECT espn_team_id, team_name, team_abbrev, team_short_name, sport
+                FROM team_league_cache
+                WHERE league_code = ?
+            """, (league_code.lower(),))
+            rows = cursor.fetchall()
+
+            if not rows:
+                return None
+
+            # Convert DB rows to team dicts matching ESPN API format
+            teams = []
+            for row in rows:
+                team = {
+                    'id': row[0],
+                    'displayName': row[1],
+                    'name': row[1],  # Use full name as name too
+                    'abbreviation': row[2],
+                    'shortName': row[3],
+                    'slug': row[1].lower().replace(' ', '-') if row[1] else '',
+                }
+                teams.append(team)
+
+            logger.debug(f"Loaded {len(teams)} teams for {league_code} from DB cache")
+            return teams
+
+        except Exception as e:
+            logger.warning(f"Error loading teams from DB cache for {league_code}: {e}")
+            return None
+
     def _get_teams_for_league(self, league_code: str) -> List[Dict]:
         """
         Get all teams for a league, using shared cache when available.
 
-        Uses module-level shared cache to prevent redundant API calls when
-        multiple TeamMatcher instances are used in parallel threads.
-        Fetches from ESPN API and caches for CACHE_DURATION.
-        College leagues use conference-based fetching to get all teams.
+        Priority order:
+        1. In-memory cache (fastest, per-generation)
+        2. TeamLeagueCache DB (pre-warmed on startup, no API call)
+        3. ESPN API (fallback for uncached leagues)
 
         Args:
             league_code: League code (e.g., 'nfl', 'epl', 'ncaam')
@@ -347,13 +396,18 @@ class TeamMatcher:
                 if datetime.now() - cached['fetched_at'] < self.CACHE_DURATION:
                     return cached['teams']
 
-            # College leagues need conference-based fetching
-            if is_college_league(league_lower) or is_college_league(league):
-                teams = self._fetch_college_teams(sport, league)
+            # Try TeamLeagueCache DB first (pre-warmed on startup, no API call needed)
+            # This eliminates ~23 seconds of API calls during EPG generation
+            teams = self._load_teams_from_db_cache(league_lower)
+            if teams:
+                logger.info(f"Loaded {len(teams)} teams for {league_code} from DB cache (no API call)")
             else:
-                # Pro leagues - simple team list
-                logger.info(f"Fetching teams for {league_code} from ESPN API")
-                teams = self.espn.get_league_teams(sport, league)
+                # Fallback to ESPN API for leagues not in DB cache
+                if is_college_league(league_lower) or is_college_league(league):
+                    teams = self._fetch_college_teams(sport, league)
+                else:
+                    logger.info(f"Fetching teams for {league_code} from ESPN API")
+                    teams = self.espn.get_league_teams(sport, league)
 
             if not teams:
                 logger.warning(f"No teams returned for {league_code}")
