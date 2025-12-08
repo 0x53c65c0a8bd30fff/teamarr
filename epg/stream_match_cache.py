@@ -22,6 +22,8 @@ STATIC FIELDS (cached, never change for an event):
 import hashlib
 import json
 import logging
+import sqlite3
+import time
 from datetime import datetime, date
 from typing import Dict, Optional, Any, Tuple, TYPE_CHECKING
 from zoneinfo import ZoneInfo
@@ -30,6 +32,13 @@ if TYPE_CHECKING:
     from api.espn_client import ESPNClient
 
 logger = logging.getLogger(__name__)
+
+# SQLite busy timeout in milliseconds (wait up to 30 seconds for lock)
+SQLITE_BUSY_TIMEOUT_MS = 30000
+
+# Retry settings for write operations
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 0.1  # 100ms base delay, doubles each retry
 
 
 class DateTimeEncoder(json.JSONEncoder):
@@ -124,6 +133,45 @@ class StreamMatchCache:
             'purged': 0,
         }
 
+    def _get_connection_with_timeout(self):
+        """Get a database connection with busy_timeout set for concurrent access."""
+        conn = self.get_connection()
+        conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+        return conn
+
+    def _execute_with_retry(self, operation_name: str, operation_func) -> Any:
+        """
+        Execute a database operation with retry logic for lock contention.
+
+        Args:
+            operation_name: Name for logging
+            operation_func: Function that takes a connection and returns result
+
+        Returns:
+            Result from operation_func
+
+        Raises:
+            sqlite3.OperationalError: If all retries exhausted
+        """
+        last_error = None
+        for attempt in range(MAX_RETRIES):
+            conn = self._get_connection_with_timeout()
+            try:
+                result = operation_func(conn)
+                return result
+            except sqlite3.OperationalError as e:
+                last_error = e
+                if "database is locked" in str(e) and attempt < MAX_RETRIES - 1:
+                    delay = RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.debug(f"[CACHE] {operation_name} retry {attempt + 1}/{MAX_RETRIES} after {delay}s: {e}")
+                    time.sleep(delay)
+                else:
+                    raise
+            finally:
+                conn.close()
+
+        raise last_error
+
     def get(
         self,
         group_id: int,
@@ -143,7 +191,7 @@ class StreamMatchCache:
         """
         fingerprint = compute_fingerprint(group_id, stream_id, stream_name)
 
-        conn = self.get_connection()
+        conn = self._get_connection_with_timeout()
         try:
             cursor = conn.cursor()
             cursor.execute("""
@@ -193,9 +241,9 @@ class StreamMatchCache:
             True if cached successfully
         """
         fingerprint = compute_fingerprint(group_id, stream_id, stream_name)
+        cached_json = json.dumps(cached_data, cls=DateTimeEncoder)
 
-        conn = self.get_connection()
-        try:
+        def do_set(conn):
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO stream_match_cache
@@ -212,19 +260,21 @@ class StreamMatchCache:
                     updated_at = CURRENT_TIMESTAMP
             """, (
                 fingerprint, group_id, stream_id, stream_name,
-                event_id, league, json.dumps(cached_data, cls=DateTimeEncoder), generation
+                event_id, league, cached_json, generation
             ))
             conn.commit()
             self._stats['sets'] += 1
             logger.debug(f"[CACHE SET] stream_id={stream_id} -> event_id={event_id}")
             return True
 
+        try:
+            return self._execute_with_retry('set', do_set)
+        except sqlite3.OperationalError as e:
+            logger.warning(f"[CACHE] set failed after retries: {e}")
+            return False
         except Exception as e:
             logger.error(f"Failed to cache stream match: {e}")
-            conn.rollback()
             return False
-        finally:
-            conn.close()
 
     def touch(
         self,
@@ -248,8 +298,7 @@ class StreamMatchCache:
         """
         fingerprint = compute_fingerprint(group_id, stream_id, stream_name)
 
-        conn = self.get_connection()
-        try:
+        def do_touch(conn):
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE stream_match_cache
@@ -258,8 +307,12 @@ class StreamMatchCache:
             """, (generation, fingerprint))
             conn.commit()
             return cursor.rowcount > 0
-        finally:
-            conn.close()
+
+        try:
+            return self._execute_with_retry('touch', do_touch)
+        except sqlite3.OperationalError as e:
+            logger.warning(f"[CACHE] touch failed after retries: {e}")
+            return False
 
     def purge_stale(self, current_generation: int) -> int:
         """
@@ -275,8 +328,7 @@ class StreamMatchCache:
         if threshold < 0:
             return 0
 
-        conn = self.get_connection()
-        try:
+        def do_purge(conn):
             cursor = conn.cursor()
             cursor.execute("""
                 DELETE FROM stream_match_cache
@@ -290,8 +342,12 @@ class StreamMatchCache:
                 logger.info(f"[CACHE PURGE] Removed {purged} stale entries (generation < {threshold})")
 
             return purged
-        finally:
-            conn.close()
+
+        try:
+            return self._execute_with_retry('purge_stale', do_purge)
+        except sqlite3.OperationalError as e:
+            logger.warning(f"[CACHE] purge_stale failed after retries: {e}")
+            return 0
 
     def get_stats(self) -> Dict[str, int]:
         """Get cache statistics for this session."""
@@ -299,7 +355,7 @@ class StreamMatchCache:
 
     def get_cache_size(self) -> int:
         """Get total number of cached entries."""
-        conn = self.get_connection()
+        conn = self._get_connection_with_timeout()
         try:
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM stream_match_cache")
@@ -318,8 +374,7 @@ class StreamMatchCache:
         Returns:
             Number of entries cleared
         """
-        conn = self.get_connection()
-        try:
+        def do_clear(conn):
             cursor = conn.cursor()
             cursor.execute("""
                 DELETE FROM stream_match_cache WHERE group_id = ?
@@ -328,8 +383,12 @@ class StreamMatchCache:
             conn.commit()
             logger.info(f"[CACHE CLEAR] Cleared {cleared} entries for group {group_id}")
             return cleared
-        finally:
-            conn.close()
+
+        try:
+            return self._execute_with_retry('clear_group', do_clear)
+        except sqlite3.OperationalError as e:
+            logger.warning(f"[CACHE] clear_group failed after retries: {e}")
+            return 0
 
     def clear_all(self) -> int:
         """
@@ -338,16 +397,19 @@ class StreamMatchCache:
         Returns:
             Number of entries cleared
         """
-        conn = self.get_connection()
-        try:
+        def do_clear_all(conn):
             cursor = conn.cursor()
             cursor.execute("DELETE FROM stream_match_cache")
             cleared = cursor.rowcount
             conn.commit()
             logger.info(f"[CACHE CLEAR] Cleared entire cache ({cleared} entries)")
             return cleared
-        finally:
-            conn.close()
+
+        try:
+            return self._execute_with_retry('clear_all', do_clear_all)
+        except sqlite3.OperationalError as e:
+            logger.warning(f"[CACHE] clear_all failed after retries: {e}")
+            return 0
 
 
 def get_generation_counter(get_connection_func) -> int:
