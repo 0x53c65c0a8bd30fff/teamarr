@@ -815,7 +815,28 @@ class LeagueDetector:
                         logger.debug(f"Found leagues via article-stripped search: '{team_name}' -> '{normalized}'")
                         return leagues
 
-                # Word-overlap matching DISABLED (v1.4.1)
+                # Tier 5: Strip common club suffixes (CF, FC, SC, AFC, etc.)
+                # Handles "Elche CF" matching "Elche", "Girona FC" matching "Girona"
+                # These suffixes are often added by stream providers but not in ESPN names
+                # NOTE: Do NOT strip "Town", "City", "United" - causes ambiguity (Manchester City vs United)
+                suffix_pattern = r'\s+(cf|fc|sc|afc|sfc|ac|bc|fk|sk|if|bk|ik|sv|vfl|vfb|tsv|fsv|spvgg)$'
+                suffix_stripped = re.sub(suffix_pattern, '', team_name, flags=re.I).strip()
+
+                if suffix_stripped and suffix_stripped != team_name:
+                    # Try direct match with suffix stripped
+                    cursor.execute("""
+                        SELECT DISTINCT league_slug FROM soccer_team_leagues
+                        WHERE LOWER(team_name) LIKE ?
+                           OR LOWER(team_name) = ?
+                    """, (f"%{suffix_stripped}%", suffix_stripped))
+                    leagues = {row[0] for row in cursor.fetchall()}
+                    if leagues:
+                        logger.debug(f"Found leagues via suffix-stripped search: '{team_name}' -> '{suffix_stripped}'")
+                        return leagues
+
+                # Word-overlap / longest-word matching DISABLED
+                # Too risky - "manchester" matches Man City AND Man United,
+                # "madrid" matches Real, Atlético, Rayo, etc.
                 # Originally intended for city name transliterations (München/Munich, Köln/Cologne)
                 # but ESPN already uses English names, and accent-stripping (Tier 2) handles accented variants.
                 # The word-overlap logic caused many false positives:
@@ -1966,12 +1987,28 @@ class LeagueDetector:
 
         try:
             config = get_league_config(league_code, get_connection)
-            if not config:
-                return
+            if config:
+                sport, api_league = parse_api_path(config['api_path'])
+                if not sport:
+                    return
+            else:
+                # Fallback for soccer leagues not in league_config but in soccer cache
+                # (e.g., eng.fa, esp.copa_del_rey, etc.)
+                conn_check = get_connection()
+                cursor_check = conn_check.cursor()
+                cursor_check.execute(
+                    "SELECT 1 FROM soccer_leagues_cache WHERE league_slug = ?",
+                    (league_code,)
+                )
+                is_soccer = cursor_check.fetchone() is not None
+                conn_check.close()
 
-            sport, api_league = parse_api_path(config['api_path'])
-            if not sport:
-                return
+                if is_soccer:
+                    sport = 'soccer'
+                    api_league = league_code
+                    logger.debug(f"Tier 4: using soccer fallback for league {league_code}")
+                else:
+                    return
 
             # SCOREBOARD FIRST: Check cached scoreboard before hitting schedule API
             # The scoreboard is already cached from Tier 3 checks, so this is free
